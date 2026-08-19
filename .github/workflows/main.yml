@@ -58,15 +58,6 @@ jobs:
           path: ${{ env.CCACHE_DIR }}
           key: ccache-${{ runner.os }}-${{ github.ref_name }}-llvm${{ env.LLVM_VERSION }}-${{ env.CMAKE_VERSION }}-${{ github.sha }}
 
-      - name: Cache pip
-        uses: actions/cache@v4
-        id: pip-cache
-        with:
-          path: ~/.cache/pip
-          key: pip-${{ hashFiles('${{ github.workspace }}/ASPIS/testing/requirements.txt') }}
-          restore-keys: |
-            pip-
-
       - name: Install Python requirements
         shell: bash
         if: steps.restore-ccache.outputs.cache-hit != 'true'
