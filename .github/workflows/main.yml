@@ -62,12 +62,15 @@ jobs:
         if: steps.restore-ccache.outputs.cache-hit != 'true'
         working-directory: ${{ github.workspace }}/ASPIS/testing
         run: |
+          python3 -m venv .venv
+          source .venv/bin/activate
           pip install -r requirements.txt
 
       - name: Testing ASPIS
         shell: bash
         working-directory: ${{ github.workspace }}/ASPIS/testing
         run: |
+          source .venv/bin/activate
           pytest test.py --no-header -v
 
       - name: Upload comparison counter artifact
