@@ -47,9 +47,8 @@ jobs:
           ccache --show-config
           ccache --show-stats
 
-          mkdir build
-          cmake -B build -DLLVM_DIR=${{ env.LLVM_INSTALL_DIR }}/lib/cmake/llvm/
-          cmake --build build
+          cmake -S . -B build -DLLVM_DIR=${{ env.LLVM_INSTALL_DIR }}/lib/cmake/llvm/
+          cmake --build build -j $(nproc) -- all
 
       - name: Save ccache
         if: steps.restore-ccache.outputs.cache-hit != 'true'
