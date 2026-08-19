@@ -4,14 +4,15 @@ env:
   LLVM_VERSION: 21
   LLVM_INSTALL_DIR: /opt/llvm-21
   CMAKE_VERSION: 4.3.0
-  MOLD_LINKER_FLAGS: -fuse-ld=mold
+  MOLD_LINKER_FLAGS: '-fuse-ld=mold'
   CCACHE_DIR: ${{ github.workspace }}/.ccache
   CCACHE_MAXSIZE: 10G
   CCACHE_BASEDIR: ${{ github.workspace }}
   CCACHE_COMPILERCHECK: content
-  CCACHE_NOHASHDIR: "true"
+  CCACHE_NOHASHDIR: 'true'
 
-on: [push]
+on:
+  - push
 
 jobs:
   compile-ASPIS:
@@ -71,13 +72,13 @@ jobs:
         if: steps.restore-ccache.outputs.cache-hit != 'true'
         working-directory: ${{ github.workspace }}/ASPIS/testing
         run: |
-           pip install -r requirements.txt
+          pip install -r requirements.txt
 
       - name: Testing ASPIS
         shell: bash
         working-directory: ${{ github.workspace }}/ASPIS/testing
         run: |
-           pytest test.py --no-header -v
+          pytest test.py --no-header -v
 
       - name: Upload comparison counter artifact
         if: always()
