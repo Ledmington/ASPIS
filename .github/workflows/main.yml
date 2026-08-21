@@ -47,7 +47,10 @@ jobs:
           ccache --show-config
           ccache --show-stats
 
-          cmake -S . -B build -G Ninja -DLLVM_DIR=${{ env.LLVM_INSTALL_DIR }}/lib/cmake/llvm/
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
+            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+            -DLLVM_DIR=${{ env.LLVM_INSTALL_DIR }}/lib/cmake/llvm/
           cmake --build build -j $(nproc) -- all
 
       - name: Save ccache
