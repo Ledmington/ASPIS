@@ -1,7 +1,6 @@
 name: ASPIS main CI
 
 env:
-  LLVM_VERSION: 21
   LLVM_INSTALL_DIR: /opt/llvm-21
 
 on:
