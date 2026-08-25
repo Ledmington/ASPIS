@@ -3,12 +3,6 @@ name: ASPIS main CI
 env:
   LLVM_VERSION: 21
   LLVM_INSTALL_DIR: /opt/llvm-21
-  CMAKE_VERSION: 4.3.0
-  CCACHE_DIR: ${{ github.workspace }}/.ccache
-  CCACHE_MAXSIZE: 10G
-  CCACHE_BASEDIR: ${{ github.workspace }}
-  CCACHE_COMPILERCHECK: content
-  CCACHE_NOHASHDIR: 'true'
 
 on:
   - push
@@ -27,42 +21,17 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
-      - name: Restore ccache
-        id: restore-ccache
-        uses: actions/cache/restore@v4
-        with:
-          path: ${{ env.CCACHE_DIR }}
-          key: ccache-${{ runner.os }}-${{ github.ref_name }}-llvm${{ env.LLVM_VERSION }}-cmake${{ env.CMAKE_VERSION }}-${{ github.sha }}
-          restore-keys: |
-            ccache-${{ runner.os }}-${{ github.ref_name }}-llvm${{ env.LLVM_VERSION }}-cmake${{ env.CMAKE_VERSION }}-
-            ccache-${{ runner.os }}-llvm${{ env.LLVM_VERSION }}-cmake${{ env.CMAKE_VERSION }}-
-
       - name: Compiling ASPIS
         shell: bash
         working-directory: ${{ github.workspace }}/ASPIS
         run: |
-          ccache --set-config=max_size=${CCACHE_MAXSIZE}
-          ccache --zero-stats
-          ccache --show-config
-          ccache --show-stats
-
           cmake -S . -B build -G Ninja \
-            -DCMAKE_C_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-            -DCMAKE_LINKER_TYPE=MOLD \
             -DLLVM_DIR=${{ env.LLVM_INSTALL_DIR }}/lib/cmake/llvm \
             -DCMAKE_C_COMPILER=${{ env.LLVM_INSTALL_DIR }}/bin/clang \
             -DCMAKE_CXX_COMPILER=${{ env.LLVM_INSTALL_DIR }}/bin/clang++ \
             -DCMAKE_C_FLAGS="--rtlib=compiler-rt -fuse-ld=lld" \
             -DCMAKE_CXX_FLAGS="--rtlib=compiler-rt -fuse-ld=lld -stdlib=libc++"
           cmake --build build -j $(nproc) -- all
-
-      - name: Save ccache
-        if: steps.restore-ccache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: ${{ env.CCACHE_DIR }}
-          key: ccache-${{ runner.os }}-${{ github.ref_name }}-llvm${{ env.LLVM_VERSION }}-cmake${{ env.CMAKE_VERSION }}-${{ github.sha }}
 
       - name: Install Python requirements
         shell: bash
