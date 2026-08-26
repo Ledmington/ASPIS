@@ -24,13 +24,8 @@ jobs:
         shell: bash
         working-directory: ${{ github.workspace }}/ASPIS
         run: |
-          cmake -S . -B build -G Ninja \
-            -DLLVM_DIR=${{ env.LLVM_INSTALL_DIR }}/lib/cmake/llvm \
-            -DCMAKE_C_COMPILER=${{ env.LLVM_INSTALL_DIR }}/bin/clang \
-            -DCMAKE_CXX_COMPILER=${{ env.LLVM_INSTALL_DIR }}/bin/clang++ \
-            -DCMAKE_C_FLAGS="--rtlib=compiler-rt -fuse-ld=lld" \
-            -DCMAKE_CXX_FLAGS="--rtlib=compiler-rt -fuse-ld=lld -stdlib=libc++"
-          cmake --build build -j $(nproc) -- all
+          cmake -B build -DLLVM_DIR=${{ env.LLVM_INSTALL_DIR }}/lib/cmake/llvm
+          cmake --build build
 
       - name: Install Python requirements
         shell: bash
