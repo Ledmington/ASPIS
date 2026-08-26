@@ -5,6 +5,7 @@ env:
 
 on:
   - push
+  - workflow_dispatch
 
 jobs:
   compile-ASPIS:
