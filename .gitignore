@@ -72,3 +72,9 @@ examples/cuda/add
 
 # Rust
 **/target/
+
+# Testing
+**/*.csv
+testing/**/__pycache__
+testing/**/.pytest_cache
+testing/**/build
