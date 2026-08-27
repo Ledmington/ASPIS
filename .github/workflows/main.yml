@@ -41,7 +41,7 @@ jobs:
         working-directory: ${{ github.workspace }}/ASPIS/testing
         run: |
           source .venv/bin/activate
-          pytest test.py --no-header -v
+          pytest test.py --no-header -v -n $(nproc) --dist loadgroup
 
       - name: Upload comparison counter artifact
         if: always()
