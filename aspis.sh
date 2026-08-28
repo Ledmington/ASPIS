@@ -28,6 +28,7 @@ debug_enabled=false
 verbose=false
 cleanup=true
 cpp_input=false
+rust_input=false
 enable_profiling=false
 
 # Check if the shell supports colors
@@ -256,10 +257,20 @@ EOF
                         cleanup=false;
                         ;;
                     *.c | *.cpp)
+                        if [[ "$rust_input" == true ]]; then
+                            error_msg "Rust input cannot be mixed with other input files (one crate root per invocation)."
+                        fi
                         input_files="$input_files $opt";
                         if [[ "$opt" == *.cpp ]]; then
                             cpp_input=true
                         fi
+                        ;;
+                    *.rs)
+                        if [[ -n "$input_files" ]]; then
+                            error_msg "Rust input cannot be mixed with other input files (one crate root per invocation)."
+                        fi
+                        input_files="$opt";
+                        rust_input=true;
                         ;;
                     *)
                         clang_options="$clang_options $opt";
@@ -346,17 +357,54 @@ run_aspis() {
     title_msg "Front-end and pre-processing"
 
     ## FRONTEND
-    for input_file in $input_files; do
-        # Extract the filename without extension
-        filename=$(basename "$input_file" | sed 's/\.[^.]*$//')
-        # Compile the file to LLVM IR (.ll) and save it in the build directory
-        exe $CLANG "$input_file" $clang_options -S -emit-llvm -O0 -Xclang -disable-O0-optnone -o "$build_dir/$filename.ll"
-    done
+    if [[ "$rust_input" == true ]]; then
+        # rustc, not clang - see rust-annotations/src/lib.rs and
+        # passes/RustAnnotationBridge.cpp for why. Debug info is forced on
+        # regardless of -g: the bridge pass below needs it to recover
+        # ToHarden<X>/etc annotations, and is stripped afterwards same as
+        # the C/C++ path if the user didn't ask to keep it (-g).
+        # codegen-units=1 guarantees exactly one *-cgu.0.rcgu.{bc,o} pair
+        # to swap the hardened IR into; save-temps keeps it (and the
+        # linker's own temp dir) on disk after rustc exits so the captured
+        # link recipe (rust_link_cmd.sh) can be replayed later.
+        filename=$(basename "$input_files" | sed 's/\.[^.]*$//')
+        input_file_abs="$(cd "$(dirname "$input_files")" && pwd)/$(basename "$input_files")"
+        rust_annotations_rlib="$DIR/rust-annotations/target/release/libaspis_annotations.rlib"
 
-    ## LINK & PREPROCESS
-    exe $LLVM_LINK $build_dir/*.ll -o $build_dir/out.ll
+        if [[ $verbose == true ]]; then
+            echo -e "\t\$ (cd $build_dir && rustc --edition 2021 -C debuginfo=2 -C codegen-units=1 -C save-temps --crate-type=bin --extern aspis_annotations=$rust_annotations_rlib --print link-args -o $filename.unhardened.out $input_file_abs > rust_link_cmd.sh)"
+        fi
+        (cd "$build_dir" && rustc --edition 2021 -C debuginfo=2 -C codegen-units=1 -C save-temps \
+            --crate-type=bin --extern aspis_annotations=$rust_annotations_rlib \
+            --print link-args -o "$filename.unhardened.out" "$input_file_abs" > rust_link_cmd.sh)
+        if [[ $? -ne 0 ]]; then
+            error_msg "Rust front-end compilation failed."
+        fi
+
+        rust_cgu_bc=$(ls "$build_dir"/*"-cgu.0.rcgu.bc" 2>/dev/null | head -n1)
+        if [[ -z "$rust_cgu_bc" ]]; then
+            error_msg "Could not locate rustc's codegen-unit bitcode output in $build_dir (expected exactly one *-cgu.0.rcgu.bc with -C codegen-units=1)."
+        fi
+        rust_cgu_o="${rust_cgu_bc%.bc}.o"
+        exe cp "$rust_cgu_bc" "$build_dir/out.ll"
+    else
+        for input_file in $input_files; do
+            # Extract the filename without extension
+            filename=$(basename "$input_file" | sed 's/\.[^.]*$//')
+            # Compile the file to LLVM IR (.ll) and save it in the build directory
+            exe $CLANG "$input_file" $clang_options -S -emit-llvm -O0 -Xclang -disable-O0-optnone -o "$build_dir/$filename.ll"
+        done
+
+        ## LINK & PREPROCESS
+        exe $LLVM_LINK $build_dir/*.ll -o $build_dir/out.ll
+    fi
 
     success_msg "Emitted and linked IR."
+
+    if [[ "$rust_input" == true ]]; then
+        exe $OPT -load-pass-plugin=$DIR/build/passes/libRUST_ANNOTATION_BRIDGE.so --passes="rust-annotation-bridge" $build_dir/out.ll -o $build_dir/out.ll
+        success_msg "Converted Rust annotations."
+    fi
 
     if [[ $debug_enabled == false ]]; then
         exe $OPT --passes="strip" $build_dir/out.ll -o $build_dir/out.ll
@@ -412,6 +460,9 @@ run_aspis() {
     success_msg "Applied CFC passes."
 
     if [[ -n "$exclude_file" ]]; then
+        if [[ "$rust_input" == true ]]; then
+            error_msg "--exclude is not supported for Rust input; mark the function with #[link_section = \"aspis_exclude\"] instead (see rust-annotations/src/lib.rs)."
+        fi
         # scan the directories of excluded files
         while IFS= read -r line 
         do
@@ -450,6 +501,9 @@ run_aspis() {
     ## Backend
     exe $OPT $build_dir/out.ll -o $build_dir/out.ll -S $opt_flags
     if [[ "$enable_profiling" == "true" ]]; then
+        if [[ "$rust_input" == true ]]; then
+            error_msg "--enable-profiling is not supported for Rust input."
+        fi
         title_msg "ASPIS Profiling"
         exe $OPT -load-pass-plugin=$DIR/build/passes/libPROFILER.so --passes="aspis-insert-check-profile" $build_dir/out.ll -o $build_dir/out.ll -S
         success_msg "Code instrumented."
@@ -465,12 +519,23 @@ run_aspis() {
         exit
     fi;
 
-    case $output_file in 
+    case $output_file in
         *.ll)
             exe cp $build_dir/out.ll $build_dir/$output_file.bak
             ;;
         *)
-            exe $LINKER $clang_options $build_dir/out.ll $asm_files -o $build_dir/$output_file
+            if [[ "$rust_input" == true ]]; then
+                # Compile the hardened IR back to the exact object rustc
+                # originally produced for this crate, then replay rustc's
+                # own captured link recipe (rust_link_cmd.sh) so the result
+                # links against the same sysroot rlibs rustc would have
+                # used - see the front-end comment above.
+                exe $CLANG -c $build_dir/out.ll -o "$rust_cgu_o"
+                exe bash -c "cd \"$build_dir\" && bash rust_link_cmd.sh"
+                exe mv "$build_dir/$filename.unhardened.out" "$build_dir/$output_file"
+            else
+                exe $LINKER $clang_options $build_dir/out.ll $asm_files -o $build_dir/$output_file
+            fi
             ;;
     esac
     success_msg "Binary emitted."
