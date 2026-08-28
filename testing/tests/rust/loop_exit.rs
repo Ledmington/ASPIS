@@ -30,16 +30,18 @@ static mut SUM: ToHarden<i32> = ToHarden::new(0);
 #[allow(static_mut_refs)]
 #[no_mangle]
 extern "C" fn aspis_main() {
-    unsafe {
-        for i in 0..5 {
-            if i == 1 {
-                continue;
-            }
-            if i == 3 {
-                break;
-            }
+    for i in 0..5 {
+        if i == 1 {
+            continue;
+        }
+        if i == 3 {
+            break;
+        }
+        unsafe {
             SUM += i;
         }
+    }
+    unsafe {
         print!("{}", *SUM);
     }
 }

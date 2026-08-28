@@ -29,3 +29,18 @@ message(STATUS "RTTI: ${LLVM_ENABLE_RTTI}")
 
 add_subdirectory(libs/TypeDeductionAnalysis)
 add_subdirectory(passes)
+
+# Rust front-end support: builds the aspis-annotations rlib that aspis.sh
+# links Rust test inputs against (see rust-annotations/src/lib.rs). Requires
+# the rust-toolchain.toml-pinned rustc/cargo on PATH.
+find_program(CARGO_EXECUTABLE cargo)
+if(CARGO_EXECUTABLE)
+  add_custom_target(rust_annotations ALL
+    COMMAND ${CARGO_EXECUTABLE} build --release --manifest-path ${CMAKE_SOURCE_DIR}/rust-annotations/Cargo.toml
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}/rust-annotations
+    COMMENT "Building aspis-annotations rlib"
+    VERBATIM
+  )
+else()
+  message(STATUS "cargo not found - Rust test inputs (aspis.sh *.rs) will not be available")
+endif()
