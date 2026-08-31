@@ -1677,8 +1677,56 @@ Type *getValueType(Value *Arg, Align *ArgAlign) {
 }
 
 /**
+ * @brief Computes the set of defined functions actually relevant to
+ * hardening: toHardenFunctions itself, the enclosing function of every
+ * instruction preprocess() already determined touches a to-harden value
+ * (toHardenVariables), and anything transitively called from either.
+ *
+ * TypeDeductionAnalysis::run() unconditionally walks every defined
+ * function's instructions, regardless of whether that function is ever
+ * going to be hardened - a plain "reachable from non-excluded code" walk
+ * can't tell apart, say, aspis_main (which the *entry point* main() calls
+ * first) from std::io::Error's boxed drop glue (which main() also reaches,
+ * later, purely to flush stdout - see rust-annotations/src/lib.rs) - both
+ * are, structurally, "only reachable via a call chain rooted at excluded
+ * code". preprocess()'s own toHardenVariables closure already makes that
+ * distinction correctly (it discovers aspis_main by tracing SUM's use-def
+ * chain, not by macro-level reachability), so reuse it here instead of
+ * re-deriving a parallel, less precise notion of reachability. Functions
+ * outside this set are hidden from TDA (see EDDI::run) instead of fixing
+ * that non-termination in TypeDeductionAnalysis itself, since nothing
+ * outside excluded code will ever exercise them.
+ */
+static std::set<Function*> computeTdaVisibleFunctions(
+    const std::set<Function*> &toHardenFunctions,
+    const std::set<Value*> &toHardenVariables) {
+  std::set<Function*> visible;
+  std::vector<Function*> worklist;
+  auto addFn = [&](Function *Fn) {
+    if (Fn && !Fn->isDeclaration() && visible.insert(Fn).second)
+      worklist.push_back(Fn);
+  };
+
+  for (Function *Fn : toHardenFunctions)
+    addFn(Fn);
+  for (Value *V : toHardenVariables)
+    if (auto *Inst = dyn_cast<Instruction>(V))
+      addFn(Inst->getFunction());
+
+  while (!worklist.empty()) {
+    Function *Fn = worklist.back();
+    worklist.pop_back();
+    for (BasicBlock &BB : *Fn)
+      for (Instruction &I : BB)
+        if (auto *Call = dyn_cast<CallBase>(&I))
+          addFn(Call->getCalledFunction());
+  }
+  return visible;
+}
+
+/**
  * @brief I have to duplicate all instructions except function calls and branches
- * 
+ *
  * 0. Replacing aliases to aliasees
  * 1. getting function annotations
  * 2. Creating fault tolerance functions
@@ -1764,7 +1812,44 @@ PreservedAnalyses EDDI::run(Module &Md, ModuleAnalysisManager &AM) {
   // Fixing the duplicated constructors
   fixDuplicatedConstructors(Md);
 
+  // Hide functions irrelevant to hardening from TDA (see
+  // computeTdaVisibleFunctions's comment for why): save each one's body in
+  // a scratch clone, then strip it so TDA sees a plain declaration, same
+  // as any genuinely external function.
+  std::set<Function*> tdaVisible = computeTdaVisibleFunctions(toHardenFunctions, toHardenVariables);
+  std::vector<std::pair<Function*, Function*>> hiddenFromTda;
+  for (Function &Fn : Md) {
+    if (Fn.isDeclaration() || tdaVisible.contains(&Fn))
+      continue;
+    // CloneFunctionInto requires the destination to either be parentless or
+    // share OldFunc's module, so the backup has to live in Md too (under a
+    // throwaway name) rather than staying detached - it's erased again once
+    // its body has been spliced back into Fn below.
+    Function *Saved = Function::Create(Fn.getFunctionType(), Fn.getLinkage(),
+                                        Fn.getName() + ".aspis_tda_saved", &Md);
+    ValueToValueMapTy SaveParams;
+    for (unsigned i = 0; i < Fn.arg_size(); i++)
+      SaveParams[Fn.getArg(i)] = Saved->getArg(i);
+    SmallVector<ReturnInst*, 8> saveReturns;
+    CloneFunctionInto(Saved, &Fn, SaveParams, CloneFunctionChangeType::GlobalChanges, saveReturns);
+    Fn.deleteBody();
+    hiddenFromTda.emplace_back(&Fn, Saved);
+  }
+
+  LLVM_DEBUG(dbgs() << "Running TypeDeductionAnalysis\n");
   deducedTypes = tda.run(Md, AM);
+  LLVM_DEBUG(dbgs() << "TypeDeductionAnalysis completed\n");
+
+  // Restore the bodies hidden from TDA above; nothing else has run yet
+  // that could have observed these functions as bodyless declarations.
+  for (auto &[Fn, Saved] : hiddenFromTda) {
+    ValueToValueMapTy RestoreParams;
+    for (unsigned i = 0; i < Saved->arg_size(); i++)
+      RestoreParams[Saved->getArg(i)] = Fn->getArg(i);
+    SmallVector<ReturnInst*, 8> restoreReturns;
+    CloneFunctionInto(Fn, Saved, RestoreParams, CloneFunctionChangeType::GlobalChanges, restoreReturns);
+    Saved->eraseFromParent();
+  }
 
   // list of duplicated instructions to remove since they are equal to the original
   std::set<CallBase *> GrayAreaCallsToFix;

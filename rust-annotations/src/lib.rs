@@ -65,12 +65,14 @@ macro_rules! annotated_wrapper {
 
         impl<X> Deref for $name<X> {
             type Target = X;
+            #[inline(always)]
             fn deref(&self) -> &X {
                 &self.0
             }
         }
 
         impl<X> DerefMut for $name<X> {
+            #[inline(always)]
             fn deref_mut(&mut self) -> &mut X {
                 &mut self.0
             }
@@ -80,6 +82,7 @@ macro_rules! annotated_wrapper {
         where
             X: AddAssign<Rhs>,
         {
+            #[inline(always)]
             fn add_assign(&mut self, rhs: Rhs) {
                 self.0 += rhs;
             }
