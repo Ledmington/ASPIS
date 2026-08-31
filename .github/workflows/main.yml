@@ -8,6 +8,22 @@ on:
   - workflow_dispatch
 
 jobs:
+  format-check:
+    runs-on: ubuntu-latest
+    container:
+      image: docker.io/ledmington/aspis-deps:llvm21
+
+    steps:
+      - name: Checking out ASPIS
+        uses: actions/checkout@v4
+        with:
+          path: ASPIS
+
+      - name: Format check
+        shell: bash
+        working-directory: ${{ github.workspace }}/ASPIS/passes
+        run: clang-format --dry-run --Werror $(find . -name '*.cpp' -o -name '*.h')
+
   compile-ASPIS:
     runs-on: ubuntu-latest
     container:
