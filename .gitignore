@@ -75,6 +75,6 @@ examples/cuda/add
 
 # Testing
 **/*.csv
-testing/**/__pycache__
-testing/**/.pytest_cache
-testing/**/build
+**/__pycache__
+**/.pytest_cache
+**/build
