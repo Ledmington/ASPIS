@@ -43,5 +43,12 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
     loop {}
 }
 
+// The precompiled core/compiler_builtins rlibs carry a data relocation to this symbol
+// regardless of panic strategy; with panic=abort it is never actually called, but a
+// plain `rustc` link (as opposed to the emit-llvm-ir + clang link ASPIS itself uses)
+// still needs it defined.
+#[unsafe(no_mangle)]
+pub extern "C" fn rust_eh_personality() {}
+
 // expected output
 // 2
