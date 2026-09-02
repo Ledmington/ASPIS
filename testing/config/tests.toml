@@ -8,6 +8,10 @@ test_name = "c_loop_exit"
 source_file = "c/control_flow/loop_exit.c"
 
 [[tests]]
+test_name = "rust_loop_exit"
+source_file = "rust/control_flow/loop_exit.rs"
+
+[[tests]]
 test_name = "c_nested-branch"
 source_file = "c/control_flow/nested-branch.c"
 
