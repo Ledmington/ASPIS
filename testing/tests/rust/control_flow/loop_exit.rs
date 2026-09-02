@@ -12,6 +12,12 @@ unsafe extern "C" {
     fn printf(fmt: *const u8, ...) -> i32;
 }
 
+// ASPIS fault handlers, invoked when a hardening check fails (see the other tests).
+#[unsafe(no_mangle)]
+pub extern "C" fn DataCorruption_Handler() {}
+#[unsafe(no_mangle)]
+pub extern "C" fn SigMismatch_Handler() {}
+
 #[unsafe(link_section = "aspis_to_harden")]
 #[unsafe(no_mangle)]
 pub static mut sum: i32 = 0;
