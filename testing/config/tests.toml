@@ -20,6 +20,30 @@ test_name = "rust_function"
 source_file = "rust/simple/function.rs"
 
 [[tests]]
+test_name = "rust_mul"
+source_file = "rust/simple/mul.rs"
+
+[[tests]]
+test_name = "rust_fact"
+source_file = "rust/simple/fact.rs"
+
+[[tests]]
+test_name = "rust_call_less_two"
+source_file = "rust/multi_instruction/call_less_two.rs"
+
+[[tests]]
+test_name = "rust_if_then_else"
+source_file = "rust/multi_instruction/if_then_else.rs"
+
+[[tests]]
+test_name = "rust_multi_if_then_else"
+source_file = "rust/multi_instruction/multi_if_then_else.rs"
+
+[[tests]]
+test_name = "rust_phi"
+source_file = "rust/multi_instruction/phi.rs"
+
+[[tests]]
 test_name = "c_nested-branch"
 source_file = "c/control_flow/nested-branch.c"
 
