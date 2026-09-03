@@ -28,6 +28,34 @@ test_name = "rust_fact"
 source_file = "rust/simple/fact.rs"
 
 [[tests]]
+test_name = "rust_inline_constexpr"
+source_file = "rust/simple/inline_constexpr.rs"
+
+[[tests]]
+test_name = "rust_volatile_memory_order"
+source_file = "rust/simple/volatile_memory_order.rs"
+
+[[tests]]
+test_name = "rust_heap"
+source_file = "rust/simple/heap.rs"
+
+[[tests]]
+test_name = "rust_ptr"
+source_file = "rust/simple/ptr.rs"
+
+[[tests]]
+test_name = "rust_class"
+source_file = "rust/simple/class.rs"
+
+[[tests]]
+test_name = "rust_file_handler"
+source_file = "rust/simple/file_handler.rs"
+
+[[tests]]
+test_name = "rust_template"
+source_file = "rust/simple/template.rs"
+
+[[tests]]
 test_name = "rust_call_less_two"
 source_file = "rust/multi_instruction/call_less_two.rs"
 
