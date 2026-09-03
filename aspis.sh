@@ -373,7 +373,7 @@ run_aspis() {
 
     ## Translate any Rust link_section markers ("aspis_<annotation>") into regular ASPIS
     ## annotations. A no-op on modules with none, so it is always safe to run.
-    exe $OPT -load-pass-plugin=$DIR/build/passes/libRUSTBRIDGE.so --passes="rust-annotation-bridge" $build_dir/out.ll -o $build_dir/out.ll
+    exe $OPT -load-pass-plugin=$DIR/build/passes/libRUSTBRIDGE.so --passes="aspis-rust-annotation-bridge" $build_dir/out.ll -o $build_dir/out.ll
     success_msg "Translated Rust annotations."
 
     if [[ $debug_enabled == false ]]; then
