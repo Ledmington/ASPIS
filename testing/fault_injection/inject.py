@@ -16,7 +16,7 @@ FAULT_INJECTION_DIR = Path(__file__).resolve().parent
 TESTING_DIR = FAULT_INJECTION_DIR.parent
 ASPIS_ROOT = TESTING_DIR.parent
 ASPIS_SH = ASPIS_ROOT / "aspis.sh"
-DEFAULT_SOURCE = TESTING_DIR / "tests" / "c" / "control_flow" / "loop_exit.c"
+DEFAULT_SOURCE = TESTING_DIR / "tests" / "rust" / "control_flow" / "loop_exit.rs"
 DEFAULT_BUILD_DIR = FAULT_INJECTION_DIR / "build"
 
 DATA_SENTINEL = "ASPIS_FAULT_INJECTION_CAUGHT: DataCorruption_Handler"
