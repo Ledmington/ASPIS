@@ -2,14 +2,8 @@
  * ************************************************************************************************
  * @brief  LLVM ModulePass that lets front-ends other than clang opt in to ASPIS annotations.
  *
- *         ASPIS reads its per-symbol directives (`to_duplicate`, `exclude`, ...) from
- *         `@llvm.global.annotations`, which clang populates from the source-level
- *         `__attribute__((annotate(...)))`. rustc has no equivalent attribute, so Rust code
- *         instead marks a global with `#[unsafe(link_section = "aspis_<annotation>")]`. This pass
- *         must run before every other ASPIS pass: it looks for globals placed in a section named
- *         "aspis_<annotation>", removes that (otherwise meaningless, and never meant to reach the
- *         linker) section, and appends an equivalent entry to `@llvm.global.annotations` so the
- *         rest of the pipeline sees it exactly as it would a clang-emitted annotation.
+ * Converts any global symbol marked with `#[unsafe(link_section = "aspis_<annotation>")]` to
+ * the corresponding ASPIS `__attribute__((annotate("<annotation>")))`.
  *
  * ************************************************************************************************
  */
@@ -27,48 +21,73 @@
 
 using namespace llvm;
 
-#define DEBUG_TYPE "rust-annotation-bridge"
+#define DEBUG_TYPE "aspis-rust-annotation-bridge"
 
-namespace {
-const StringRef SectionPrefix = "aspis_";
+namespace
+{
+  const StringRef SectionPrefix = "aspis_";
 
-// A global qualifies if it sits in a section named "aspis_<annotation>"; the annotation
-// is whatever follows the prefix, so any annotation ASPIS understands works without
-// this pass needing to know its name.
-bool getRustAnnotation(GlobalObject &GO, StringRef &Annotation) {
-  if (!GO.hasSection())
-    return false;
+  std::optional<std::string> getASPISAnnotation(GlobalObject &GO)
+  {
+    if (!GO.hasSection())
+    {
+      return std::nullopt;
+    }
 
-  StringRef Section = GO.getSection();
-  if (!Section.starts_with(SectionPrefix))
-    return false;
-
-  Annotation = Section.substr(SectionPrefix.size());
-  return !Annotation.empty();
-}
+    StringRef Section = GO.getSection();
+    if (Section == "aspis_to_harden")
+    {
+      return {"to_harden"};
+    }
+    else if (Section == "aspis_to_duplicate")
+    {
+      return {"to_duplicate"};
+    }
+    else if (Section == "aspis_exclude")
+    {
+      return {"exclude"};
+    }
+    else
+    {
+      return std::nullopt;
+    }
+  }
 } // namespace
 
-class RustAnnotationBridge : public PassInfoMixin<RustAnnotationBridge> {
+class RustAnnotationBridge : public PassInfoMixin<RustAnnotationBridge>
+{
 public:
-  PreservedAnalyses run(Module &Md, ModuleAnalysisManager &) {
+  PreservedAnalyses run(Module &Md, ModuleAnalysisManager &)
+  {
     std::vector<std::pair<GlobalObject *, StringRef>> ToAnnotate;
 
-    for (GlobalVariable &GV : Md.globals()) {
-      StringRef Annotation;
-      if (getRustAnnotation(GV, Annotation))
-        ToAnnotate.emplace_back(&GV, Annotation);
+    for (GlobalVariable &GV : Md.globals())
+    {
+      std::optional<std::string> Annotation = getASPISAnnotation(GV);
+      if (Annotation.has_value())
+      {
+        ToAnnotate.emplace_back(&GV, Annotation.value());
+      }
     }
-    for (Function &Fn : Md) {
-      StringRef Annotation;
-      if (getRustAnnotation(Fn, Annotation))
-        ToAnnotate.emplace_back(&Fn, Annotation);
+
+    for (Function &Fn : Md)
+    {
+      std::optional<std::string> Annotation = getASPISAnnotation(Fn);
+      if (Annotation.has_value())
+      {
+        ToAnnotate.emplace_back(&Fn, Annotation.value());
+      }
     }
 
     if (ToAnnotate.empty())
+    {
       return PreservedAnalyses::all();
+    }
 
     for (auto &[GV, Annotation] : ToAnnotate)
+    {
       GV->setSection("");
+    }
 
     addAnnotations(Md, ToAnnotate);
 
@@ -79,29 +98,32 @@ public:
 
 private:
   static void addAnnotations(Module &Md,
-                              ArrayRef<std::pair<GlobalObject *, StringRef>> ToAnnotate) {
+                             ArrayRef<std::pair<GlobalObject *, StringRef>> ToAnnotate)
+  {
     LLVMContext &Ctx = Md.getContext();
     auto *PtrTy = PointerType::getUnqual(Ctx);
-    // {target, annotation string}: the same two leading fields clang emits, and the only
-    // ones Utils::getFuncAnnotations() reads.
     auto *EntryTy = StructType::get(Ctx, {PtrTy, PtrTy});
-
     std::vector<Constant *> Entries;
 
-    // Preserve any annotations clang already emitted, e.g. in a module linked together
-    // from both C and Rust translation units.
-    if (GlobalVariable *Existing = Md.getGlobalVariable("llvm.global.annotations")) {
+    // Preserve any annotations clang already emitted
+    if (GlobalVariable *Existing = Md.getGlobalVariable("llvm.global.annotations"))
+    {
       if (auto *CA = dyn_cast<ConstantArray>(Existing->getInitializer()))
+      {
         for (Value *Op : CA->operands())
+        {
           Entries.push_back(cast<Constant>(Op));
+        }
+      }
       Existing->eraseFromParent();
     }
 
-    for (auto &[GV, Annotation] : ToAnnotate) {
+    for (auto &[GV, Annotation] : ToAnnotate)
+    {
       Constant *Str = ConstantDataArray::getString(Ctx, Annotation, /*AddNull=*/true);
       auto *StrGV = new GlobalVariable(Md, Str->getType(), /*isConstant=*/true,
-                                        GlobalValue::PrivateLinkage, Str,
-                                        GV->getName() + ".aspis_annotation");
+                                       GlobalValue::PrivateLinkage, Str,
+                                       GV->getName() + ".aspis_annotation");
       StrGV->setSection("llvm.metadata");
       StrGV->setUnnamedAddr(GlobalValue::UnnamedAddr::Global);
 
@@ -116,13 +138,17 @@ private:
   }
 };
 
-llvm::PassPluginLibraryInfo getRustAnnotationBridgePluginInfo() {
-  return {LLVM_PLUGIN_API_VERSION, "rust-annotation-bridge", LLVM_VERSION_STRING,
-          [](PassBuilder &PB) {
+llvm::PassPluginLibraryInfo getRustAnnotationBridgePluginInfo()
+{
+  return {LLVM_PLUGIN_API_VERSION, "aspis-rust-annotation-bridge", LLVM_VERSION_STRING,
+          [](PassBuilder &PB)
+          {
             PB.registerPipelineParsingCallback(
                 [](StringRef Name, ModulePassManager &MPM,
-                   ArrayRef<PassBuilder::PipelineElement>) {
-                  if (Name == "rust-annotation-bridge") {
+                   ArrayRef<PassBuilder::PipelineElement>)
+                {
+                  if (Name == "aspis-rust-annotation-bridge")
+                  {
                     MPM.addPass(RustAnnotationBridge());
                     return true;
                   }
@@ -131,10 +157,8 @@ llvm::PassPluginLibraryInfo getRustAnnotationBridgePluginInfo() {
           }};
 }
 
-// This is the core interface for pass plugins. It guarantees that 'opt' will
-// be able to recognize RustAnnotationBridge when added to the pass pipeline on the
-// command line, i.e. via '-passes=rust-annotation-bridge'
 extern "C" LLVM_ATTRIBUTE_WEAK ::llvm::PassPluginLibraryInfo
-llvmGetPassPluginInfo() {
+llvmGetPassPluginInfo()
+{
   return getRustAnnotationBridgePluginInfo();
 }
