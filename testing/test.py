@@ -11,6 +11,7 @@ import re
 # Default configurations
 ASPIS_SCRIPT = "../aspis.sh"  # Path to the ASPIS compilation script
 TEST_DIR = "./tests"  # Directory containing the test cases
+RUST_ANNOTATIONS_RLIB = "../rust-annotations/target/release/libaspis_annotations.rlib"
 
 DOCKER_SHARED_VOLUME = "/workspace/ASPIS/tmp"
 LOCAL_SHARED_VOLUME = "./tests/"
@@ -69,7 +70,12 @@ def cleanup_out_ll(build_dir):
 # Compile without ASPIS to get expected output
 def compile_without_aspis(source_file, output_file, llvm_bin, build_dir):
   """Compile a file without ASPIS."""
-  command = f"{llvm_bin}/clang++ {source_file} -o {build_dir}/{output_file}.out --verbose"
+  if source_file.endswith(".rs"):
+    # rustc, not clang++ - matches the reference build aspis.sh's Rust
+    # front-end performs before hardening (see RUST_ANNOTATIONS_RLIB).
+    command = f"rustc --edition 2021 --crate-type=bin --extern aspis_annotations={RUST_ANNOTATIONS_RLIB} -o {build_dir}/{output_file}.out {source_file}"
+  else:
+    command = f"{llvm_bin}/clang++ {source_file} -o {build_dir}/{output_file}.out --verbose"
   print(command)
   stdout, stderr, exit_code = run_command(command)
   if exit_code != 0:

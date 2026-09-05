@@ -1,7 +1,17 @@
 #!/usr/bin/env python3
-"""Runs a C/C++ file through the same pass pipeline as aspis.sh, stage
+"""Runs a C/C++ or Rust file through the same pass pipeline as aspis.sh, stage
 by stage, and dumps the CFG (as .dot and .svg) of every function after each
 stage. Useful to see exactly which pass introduces which basic blocks.
+
+This is a readability-focused Python port of cfg-pipeline.sh. Behavior is
+kept identical on purpose; cfg-pipeline.sh remains the canonical version and
+is not being replaced.
+
+A <source-file> ending in .rs is run through rustc + rust-annotation-bridge
+instead of clang, matching aspis.sh's Rust front-end (see its comments for
+why); this requires the rust-toolchain.toml-pinned rustc on PATH and both
+rust-annotations/target/release/libaspis_annotations.rlib and
+build/passes/libRUST_ANNOTATION_BRIDGE.so already built.
 """
 
 from __future__ import annotations
@@ -42,7 +52,9 @@ def parse_args():
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("source", help="C/C++ source file to run through the pipeline")
+    parser.add_argument(
+        "source", help="C/C++/Rust source file to run through the pipeline"
+    )
     parser.add_argument(
         "--llvm-bin",
         help="Directory containing clang/clang++/opt/llvm-link "
@@ -172,6 +184,47 @@ class Pipeline:
         ]
 
 
+def run_rust_frontend(
+    rustc: str, src: Path, rust_annotations_rlib: Path, llvm_dis: Path, cur_ll: Path
+) -> None:
+    """Mirrors aspis.sh's Rust front-end: rustc emits one codegen-unit
+    bitcode file (-C codegen-units=1 guarantees exactly one), which becomes
+    the starting IR in place of clang's output. -C save-temps keeps that
+    bitcode on disk after rustc exits so it can be picked up here."""
+    filename = src.stem
+    src_abs = src.resolve()
+    with tempfile.TemporaryDirectory() as tmp:
+        with open(os.path.join(tmp, "rust_link_cmd.sh"), "w") as link_cmd:
+            subprocess.run(
+                [
+                    rustc,
+                    "--edition",
+                    "2021",
+                    "-C",
+                    "debuginfo=2",
+                    "-C",
+                    "codegen-units=1",
+                    "-C",
+                    "save-temps",
+                    "--crate-type=bin",
+                    "--extern",
+                    f"aspis_annotations={rust_annotations_rlib}",
+                    "--print",
+                    "link-args",
+                    "-o",
+                    f"{filename}.unhardened.out",
+                    str(src_abs),
+                ],
+                cwd=tmp,
+                stdout=link_cmd,
+                check=True,
+            )
+        cgu_bc = glob.glob(os.path.join(tmp, "*-cgu.0.rcgu.bc"))
+        if not cgu_bc:
+            sys.exit(f"Could not locate rustc's codegen-unit bitcode output in {tmp}")
+        subprocess.run([llvm_dis, cgu_bc[0], "-o", str(cur_ll)], check=True)
+
+
 def main() -> None:
     args = parse_args()
     src = Path(args.source)
@@ -179,11 +232,35 @@ def main() -> None:
         sys.exit(f"No such file: {src}")
 
     llvm_bin = resolve_llvm_bin(args.llvm_bin)
-    clang, clangxx, opt = (llvm_bin / name for name in ("clang", "clang++", "opt"))
+    clang, clangxx, opt, llvm_dis = (
+        llvm_bin / name for name in ("clang", "clang++", "opt", "llvm-dis")
+    )
 
-    for tool in (clang, clangxx, opt):
-        require_executable(tool)
-    frontend = clangxx if src.suffix in (".cpp", ".cc", ".cxx") else clang
+    rust_input = src.suffix == ".rs"
+    rustc = rust_annotations_rlib = bridge_lib = frontend = None
+
+    if rust_input:
+        rustc = shutil.which("rustc")
+        if not rustc:
+            sys.exit("Cannot find 'rustc' in PATH")
+        require_executable(opt)
+        require_executable(llvm_dis)
+
+        rust_annotations_rlib = (
+            DIR / "rust-annotations/target/release/libaspis_annotations.rlib"
+        )
+        if not rust_annotations_rlib.is_file():
+            sys.exit(
+                f"Missing {rust_annotations_rlib} (build it first: cmake --build build)"
+            )
+
+        bridge_lib = DIR / "build/passes/libRUST_ANNOTATION_BRIDGE.so"
+        if not bridge_lib.is_file():
+            sys.exit(f"Missing {bridge_lib} (build it first: cmake --build build)")
+    else:
+        for tool in (clang, clangxx, opt):
+            require_executable(tool)
+        frontend = clangxx if src.suffix in (".cpp", ".cc", ".cxx") else clang
 
     if not shutil.which("dot"):
         sys.exit("Graphviz 'dot' not found in PATH")
@@ -203,22 +280,33 @@ def main() -> None:
     pipeline = Pipeline(opt, out_dir, llvm_debug_args)
 
     print("== Frontend ==")
-    subprocess.run(
-        [
-            frontend,
-            str(src),
-            "-S",
-            "-emit-llvm",
-            "-O0",
-            "-Xclang",
-            "-disable-O0-optnone",
-            "-o",
-            str(pipeline.cur_ll),
-        ],
-        check=True,
-    )
+    if rust_input:
+        run_rust_frontend(rustc, src, rust_annotations_rlib, llvm_dis, pipeline.cur_ll)
+    else:
+        subprocess.run(
+            [
+                frontend,
+                str(src),
+                "-S",
+                "-emit-llvm",
+                "-O0",
+                "-Xclang",
+                "-disable-O0-optnone",
+                "-o",
+                str(pipeline.cur_ll),
+            ],
+            check=True,
+        )
     pipeline.snapshot("00_frontend")
     pipeline.stage_num = 1
+
+    if rust_input:
+        pipeline.run_stage(
+            "rust-annotation-bridge",
+            pipeline.opt_plugin_pass_cmd(
+                "libRUST_ANNOTATION_BRIDGE.so", "rust-annotation-bridge"
+            ),
+        )
 
     pipeline.run_stage("lower-switch", pipeline.opt_pass_cmd("lower-switch"))
     pipeline.run_stage(

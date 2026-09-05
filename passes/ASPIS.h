@@ -19,6 +19,17 @@ using namespace llvm;
 */
 #define LOG_COMPILED_FUNCS 1
 
+// RUST FRONT-END SUPPORT
+// Converts globals marked ToHarden<X>/ToDuplicate<X>/Exclude<X> wrapper
+// types into the same llvm.global.annotations entries clang emits
+// for __attribute__((annotate(...))). Must run before any pass that
+// reads annotations.
+class RustAnnotationBridge : public PassInfoMixin<RustAnnotationBridge> {
+    public:
+        PreservedAnalyses run(Module &Md, ModuleAnalysisManager &AM);
+        static bool isRequired() { return true; }
+};
+
 // DATA PROTECTION
 class FuncRetToRef : public PassInfoMixin<FuncRetToRef> {
     private:
