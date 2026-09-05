@@ -21,55 +21,22 @@ pub extern "C" fn SigMismatch_Handler() {
     }
 }
 
-struct MyClass {
-    a: i32,
-    b: i32,
-}
-
-impl MyClass {
-    fn sum(&self) -> i32 {
-        self.a + self.b
-    }
-
-    fn print(&self) {
-        unsafe {
-            printf(b"%d, %d\n\0".as_ptr(), self.a, self.b);
-        }
-    }
-}
-
-struct DerivedClass {
-    base: MyClass,
-    c: i32,
-}
-
-impl DerivedClass {
-    fn print(&self) {
-        unsafe {
-            printf(b"%d, %d, %d\n\0".as_ptr(), self.base.a, self.base.b, self.c);
-        }
-    }
-}
-
 #[unsafe(link_section = "aspis_to_harden")]
 #[unsafe(no_mangle)]
-pub static mut derived_obj: DerivedClass = DerivedClass {
-    base: MyClass { a: 3, b: 6 },
-    c: 9,
-};
+pub static mut modulo: i32 = 0;
 
 #[unsafe(no_mangle)]
 pub extern "C" fn main() -> i32 {
-    // Test class and member function
-    let my_obj = MyClass { a: 5, b: 7 };
+    let a = 5;
+    let b = 3;
+    let sum = a + b;
+    let diff = sum - 2;
+    let prod = diff * 4;
+    let quot = prod / 3;
     unsafe {
-        printf(b"%d\n\0".as_ptr(), my_obj.sum());
-    }
-    my_obj.print();
-
-    // Test derived class with overridden "virtual" function
-    unsafe {
-        derived_obj.print();
+        modulo = quot % 5;
+        // expected result: ((((5+3)-2)*4)/3)%5 = (6*4)/3 = 24/3 = 8 % 5 = 3
+        printf(b"%d\0".as_ptr(), modulo);
     }
     0
 }
@@ -81,3 +48,6 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn rust_eh_personality() {}
+
+// expected output
+// 3

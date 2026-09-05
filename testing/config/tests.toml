@@ -72,6 +72,55 @@ test_name = "rust_phi"
 source_file = "rust/multi_instruction/phi.rs"
 
 [[tests]]
+test_name = "rust_function_pointer"
+source_file = "rust/control_flow/function_pointer.rs"
+
+[[tests]]
+test_name = "rust_nested_branch"
+source_file = "rust/control_flow/nested_branch.rs"
+
+[[tests]]
+test_name = "rust_simple_branch"
+source_file = "rust/control_flow/simple_branch.rs"
+
+[[tests]]
+test_name = "rust_switch_case"
+source_file = "rust/control_flow/switch_case.rs"
+
+[[tests]]
+test_name = "rust_data_dep_branches"
+source_file = "rust/data_duplication_integrity/data_dep_branches.rs"
+
+[[tests]]
+test_name = "rust_global_var_across_functions"
+source_file = "rust/data_duplication_integrity/global_var_across_functions.rs"
+
+[[tests]]
+test_name = "rust_misc_data_dup"
+source_file = "rust/data_duplication_integrity/misc_data_dup.rs"
+
+[[tests]]
+test_name = "rust_printf_to_duplicate"
+source_file = "rust/data_duplication_integrity/printf_to_duplicate.rs"
+
+[[tests]]
+test_name = "rust_volatile_io"
+source_file = "rust/data_duplication_integrity/volatile_io.rs"
+
+[[tests]]
+test_name = "rust_arit_pipeline"
+source_file = "rust/misc_math/arit_pipeline.rs"
+
+[[tests]]
+test_name = "rust_mixed_ops"
+source_file = "rust/misc_math/mixed_ops.rs"
+
+[[tests]]
+test_name = "rust_xor_cypher"
+source_file = "rust/misc_math/xor_cypher.rs"
+black_list = ["--reddi", "--reddi --multiple-errbb", "--reddi --coarse-grained", "--reddi --multiple-errbb --coarse-grained"]
+
+[[tests]]
 test_name = "c_nested-branch"
 source_file = "c/control_flow/nested-branch.c"
 

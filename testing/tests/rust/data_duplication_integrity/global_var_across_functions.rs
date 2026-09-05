@@ -21,31 +21,27 @@ pub extern "C" fn SigMismatch_Handler() {
     }
 }
 
-// Simulates a resource (like a file) using RAII: `Drop` stands in for the C++
-// destructor. No annotation here (matches the original), since this test is about
-// ASPIS not breaking scope-based cleanup, not about hardening a particular value.
-struct FakeFileHandler;
+#[unsafe(link_section = "aspis_to_harden")]
+#[unsafe(no_mangle)]
+pub static mut g: i32 = 0;
 
-impl FakeFileHandler {
-    fn new() -> Self {
-        unsafe {
-            printf(b"Handler created\n\0".as_ptr());
-        }
-        FakeFileHandler
+extern "C" fn increment() {
+    unsafe {
+        g += 1;
     }
 }
 
-impl Drop for FakeFileHandler {
-    fn drop(&mut self) {
-        unsafe {
-            printf(b"File closed\n\0".as_ptr());
-        }
+extern "C" fn print() {
+    unsafe {
+        printf(b"%d\0".as_ptr(), g);
     }
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn main() -> i32 {
-    let _handler = FakeFileHandler::new();
+    increment();
+    increment();
+    print();
     0
 }
 
@@ -56,3 +52,6 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn rust_eh_personality() {}
+
+// expected output
+// 2
