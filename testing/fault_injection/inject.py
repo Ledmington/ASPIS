@@ -1,37 +1,4 @@
 #!/usr/bin/env python3
-"""
-Standalone SEU fault-injection campaign for ASPIS-hardened binaries.
-
-This is NOT wired into the pytest suite (testing/test.py) yet -- it is a separate
-tool to validate that ASPIS's hardening passes actually catch injected faults at
-runtime, as opposed to test.py, which only checks that a *clean* run of the
-hardened binary produces the same output as an unhardened one.
-
-Method: compile once with a chosen data/cfc technique combo, then repeatedly copy
-the resulting binary, flip a single random bit among `main`'s on-disk immediate
-and displacement operand bytes -- located precisely via Capstone's per-instruction
-encoding info, not code bytes in general, since a flipped opcode/ModRM byte mostly
-just breaks instruction decoding (SIGILL) before any ASPIS check ever runs, while
-an immediate/displacement byte encodes an actual value (a signature constant, a
-comparison constant, a stack offset) -- run the patched copy, and classify the
-outcome by grepping stdout for the sentinel strings that
-testing/tests/c/control_flow/loop_exit.c's fault handlers print. This avoids
-needing a debugger attached to the corrupted process or any knowledge of
-compiler-internal shadow-variable names.
-
-For comparison it also runs the same campaign against a --no-dup --no-cfc build
-of the same source, which should catch close to nothing -- proving the campaign
-is actually exercising the hardening rather than just measuring "does a random
-bit flip crash the program".
-
-Must run where clang/opt/llvm-link 21 are available, e.g. inside the
-aspis-deps:llvm21 container:
-
-    docker run --rm -v "$PWD/..":/workspace/ASPIS -w /workspace/ASPIS \\
-        ledmington/aspis-deps:llvm21 bash -c '
-            pip3 install --break-system-packages -q -r testing/fault_injection/requirements.txt &&
-            python3 testing/fault_injection/inject.py'
-"""
 
 import argparse
 import random
@@ -42,6 +9,8 @@ import sys
 import tomllib
 from collections import Counter
 from pathlib import Path
+
+import capstone
 
 FAULT_INJECTION_DIR = Path(__file__).resolve().parent
 TESTING_DIR = FAULT_INJECTION_DIR.parent
@@ -93,8 +62,7 @@ _SYMBOL_RE = re.compile(
 )
 
 
-def text_section_addr_off(binary: Path) -> tuple[int, int]:
-    """Returns (address, file_offset) of `binary`'s .text section."""
+def text_section_address_offset(binary: Path) -> tuple[int, int]:
     sections = subprocess.run(
         ["readelf", "-W", "-S", str(binary)], text=True, capture_output=True, check=True
     ).stdout
@@ -108,7 +76,6 @@ def text_section_addr_off(binary: Path) -> tuple[int, int]:
 def function_byte_range(
     binary: Path, func_name: str, text_addr: int, text_off: int
 ) -> tuple[int, int, int]:
-    """Returns (file_offset, size, virtual_address) of `func_name`'s machine code within `binary`."""
     symbols = subprocess.run(
         ["readelf", "-W", "-s", str(binary)], text=True, capture_output=True, check=True
     ).stdout
@@ -132,19 +99,6 @@ def function_byte_range(
 def operand_biased_offsets(
     binary: Path, file_offset: int, size: int, addr: int
 ) -> list[int]:
-    """
-    Disassembles the function's machine code with Capstone and returns file offsets
-    covering only the encoded immediate/displacement operand bytes of each
-    instruction (via Capstone's per-instruction `encoding.imm_offset`/`disp_offset`),
-    rather than opcode/ModRM/SIB bytes. Flipping a byte among the opcode/ModRM bytes
-    (most of a short x86 instruction) mostly either changes which registers an
-    instruction operates on or breaks decoding outright (SIGILL) before any check
-    code ever runs; flipping an immediate/displacement byte changes an actual
-    encoded *value* (a signature constant, a comparison constant, a stack offset),
-    which is what an SEU corrupting a computed value would look like.
-    """
-    import capstone
-
     code = binary.read_bytes()[file_offset : file_offset + size]
     md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_64)
     md.detail = True
@@ -201,7 +155,7 @@ def classify(stdout: str, returncode: int, golden_stdout: str, timed_out: bool) 
 def run_campaign(
     binary: Path, func_name: str, trials: int, seed: int, timeout: float, work_dir: Path
 ) -> Counter:
-    text_addr, text_off = text_section_addr_off(binary)
+    text_addr, text_off = text_section_address_offset(binary)
     offset, size, addr = function_byte_range(binary, func_name, text_addr, text_off)
 
     try:
@@ -292,18 +246,15 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--timeout", type=float, default=5.0)
     parser.add_argument("--build-dir", type=Path, default=DEFAULT_BUILD_DIR)
-    parser.add_argument(
-        "--no-control",
-        action="store_true",
-        help="skip the --no-dup --no-cfc negative-control campaign",
-    )
     args = parser.parse_args()
+
+    for name, value in vars(args).items():
+        print(f"  {name}: {value}")
 
     llvm_bin = args.llvm_bin or default_llvm_bin()
     if shutil.which("clang", path=llvm_bin) is None:
         print(
-            f"warning: clang not found under --llvm-bin {llvm_bin!r}; "
-            f"run this inside the aspis-deps container",
+            f"warning: clang not found under --llvm-bin {llvm_bin!r}",
             file=sys.stderr,
         )
 
@@ -328,32 +279,6 @@ def main() -> int:
         hardened_counts,
         args.trials,
     )
-
-    if not args.no_control:
-        print("\nCompiling negative-control build (--no-dup --no-cfc)...")
-        control = compile_with_aspis(
-            args.source, "control", ["--no-dup", "--no-cfc"], llvm_bin, args.build_dir
-        )
-        control_counts = run_campaign(
-            control,
-            args.func,
-            args.trials,
-            args.seed,
-            args.timeout,
-            args.build_dir / "control_trials",
-        )
-        print_summary("control [--no-dup --no-cfc]", control_counts, args.trials)
-
-        caught_hardened = sum(
-            v for k, v in hardened_counts.items() if k.startswith("caught")
-        )
-        caught_control = sum(
-            v for k, v in control_counts.items() if k.startswith("caught")
-        )
-        print(
-            f"\nDetection rate: hardened {100 * caught_hardened / args.trials:.1f}% "
-            f"vs control {100 * caught_control / args.trials:.1f}%"
-        )
 
     return 0
 
