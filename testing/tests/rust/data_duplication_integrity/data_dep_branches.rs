@@ -21,55 +21,20 @@ pub extern "C" fn SigMismatch_Handler() {
     }
 }
 
-struct MyClass {
-    a: i32,
-    b: i32,
-}
-
-impl MyClass {
-    fn sum(&self) -> i32 {
-        self.a + self.b
-    }
-
-    fn print(&self) {
-        unsafe {
-            printf(b"%d, %d\n\0".as_ptr(), self.a, self.b);
-        }
-    }
-}
-
-struct DerivedClass {
-    base: MyClass,
-    c: i32,
-}
-
-impl DerivedClass {
-    fn print(&self) {
-        unsafe {
-            printf(b"%d, %d, %d\n\0".as_ptr(), self.base.a, self.base.b, self.c);
-        }
-    }
-}
-
 #[unsafe(link_section = "aspis_to_harden")]
 #[unsafe(no_mangle)]
-pub static mut derived_obj: DerivedClass = DerivedClass {
-    base: MyClass { a: 3, b: 6 },
-    c: 9,
-};
+pub static mut y: i32 = 0;
 
 #[unsafe(no_mangle)]
 pub extern "C" fn main() -> i32 {
-    // Test class and member function
-    let my_obj = MyClass { a: 5, b: 7 };
+    let x = 5;
     unsafe {
-        printf(b"%d\n\0".as_ptr(), my_obj.sum());
-    }
-    my_obj.print();
-
-    // Test derived class with overridden "virtual" function
-    unsafe {
-        derived_obj.print();
+        if x > 3 {
+            y = 7;
+        } else {
+            y = 9;
+        }
+        printf(b"%d\0".as_ptr(), y);
     }
     0
 }
@@ -81,3 +46,6 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn rust_eh_personality() {}
+
+// expected output
+// 7

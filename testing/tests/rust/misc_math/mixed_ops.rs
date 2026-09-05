@@ -21,55 +21,22 @@ pub extern "C" fn SigMismatch_Handler() {
     }
 }
 
-struct MyClass {
-    a: i32,
-    b: i32,
-}
-
-impl MyClass {
-    fn sum(&self) -> i32 {
-        self.a + self.b
-    }
-
-    fn print(&self) {
-        unsafe {
-            printf(b"%d, %d\n\0".as_ptr(), self.a, self.b);
-        }
-    }
-}
-
-struct DerivedClass {
-    base: MyClass,
-    c: i32,
-}
-
-impl DerivedClass {
-    fn print(&self) {
-        unsafe {
-            printf(b"%d, %d, %d\n\0".as_ptr(), self.base.a, self.base.b, self.c);
-        }
-    }
-}
-
 #[unsafe(link_section = "aspis_to_harden")]
 #[unsafe(no_mangle)]
-pub static mut derived_obj: DerivedClass = DerivedClass {
-    base: MyClass { a: 3, b: 6 },
-    c: 9,
-};
+pub static mut res: f32 = 0.0;
 
 #[unsafe(no_mangle)]
 pub extern "C" fn main() -> i32 {
-    // Test class and member function
-    let my_obj = MyClass { a: 5, b: 7 };
-    unsafe {
-        printf(b"%d\n\0".as_ptr(), my_obj.sum());
-    }
-    my_obj.print();
+    let i: i32 = 5;
+    let f: f32 = 2.5;
+    let c: i8 = 3;
+    let l: i64 = 4;
 
-    // Test derived class with overridden "virtual" function
     unsafe {
-        derived_obj.print();
+        // 5 + 2.5 + 3 + 4 = 14.5
+        res = i as f32 + f + c as f32 + l as f32;
+        // C variadic calls always promote float args to double.
+        printf(b"%.1f\0".as_ptr(), res as f64);
     }
     0
 }
@@ -81,3 +48,6 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn rust_eh_personality() {}
+
+// expected output
+// 14.5

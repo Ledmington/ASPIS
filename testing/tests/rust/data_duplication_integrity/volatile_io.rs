@@ -21,31 +21,17 @@ pub extern "C" fn SigMismatch_Handler() {
     }
 }
 
-// Simulates a resource (like a file) using RAII: `Drop` stands in for the C++
-// destructor. No annotation here (matches the original), since this test is about
-// ASPIS not breaking scope-based cleanup, not about hardening a particular value.
-struct FakeFileHandler;
-
-impl FakeFileHandler {
-    fn new() -> Self {
-        unsafe {
-            printf(b"Handler created\n\0".as_ptr());
-        }
-        FakeFileHandler
-    }
-}
-
-impl Drop for FakeFileHandler {
-    fn drop(&mut self) {
-        unsafe {
-            printf(b"File closed\n\0".as_ptr());
-        }
-    }
-}
+// Simulate memory-mapped I/O: not annotated, read through a volatile load so it
+// isn't folded to a constant before ASPIS ever sees it.
+#[unsafe(no_mangle)]
+pub static mut io_port: i32 = 42;
 
 #[unsafe(no_mangle)]
 pub extern "C" fn main() -> i32 {
-    let _handler = FakeFileHandler::new();
+    unsafe {
+        let x = core::ptr::read_volatile(&raw const io_port);
+        printf(b"%d\0".as_ptr(), x);
+    }
     0
 }
 
@@ -56,3 +42,6 @@ fn panic(_info: &core::panic::PanicInfo) -> ! {
 
 #[unsafe(no_mangle)]
 pub extern "C" fn rust_eh_personality() {}
+
+// expected output
+// 42
