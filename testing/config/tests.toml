@@ -205,4 +205,4 @@ black_list = ["--inter-rasm", "--racfed"]
 
 [[tests]]
 test_name = "rust_loop_exit"
-source_file = "loop_exit.rs"
+source_file = "rust/loop_exit.rs"
