@@ -1,0 +1,8 @@
+[package]
+name = "aspis-annotations"
+version = "0.1.0"
+edition = "2021"
+description = "Marker wrapper types recognized by ASPIS's rust-annotation-bridge LLVM pass, standing in for clang's __attribute__((annotate(...))) on Rust statics."
+
+[lib]
+crate-type = ["rlib"]

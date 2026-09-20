@@ -1,5 +1,12 @@
 add_subdirectory(Utils Utils)
 
+# Rust front-end support
+add_library(RUST_ANNOTATION_BRIDGE SHARED
+				RustAnnotationBridge.cpp
+				Utils/Utils.cpp
+)
+target_link_libraries(RUST_ANNOTATION_BRIDGE PUBLIC TypeDeductionAnalysis)
+
 # EDDI
 add_library(EDDI SHARED
 				DuplicateGlobals.cpp

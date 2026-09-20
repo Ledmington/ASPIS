@@ -1,0 +1,3 @@
+# Rust 1.93.0 is the oldest version based on LLVM 21.1.8
+[toolchain]
+channel = "1.93.0"
