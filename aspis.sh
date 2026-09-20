@@ -115,8 +115,10 @@ parse_commands() {
         -o <file>           Write the compilation output to <file>.
         --build-dir <path>  Specify the directory where to place all the build
                             files.
-        --llvm-bin  <path>  Set the path to the llvm binaries (clang, opt, 
+        --llvm-bin  <path>  Set the path to the llvm binaries (clang, opt,
                             llvm-link) to <path>.
+        --rust-bin  <path>  Set the path to the rust binaries (rustc) to
+                            <path>.
         --suffix    <value> Set the suffix of the binaries used (clang, opt, 
                             llvm-link) to <value>.
         --exclude   <file>  Set the files to exclude from the compilation. The 
@@ -174,6 +176,13 @@ EOF
                             parse_state=3;
                         else
                             llvm_bin=${opt##"--llvm-bin="};
+                        fi;
+                        ;;
+                    --rust-bin*)
+                        if [[ ${#opt} -eq 10 ]]; then
+                            parse_state=8;
+                        else
+                            rust_bin=${opt##"--rust-bin="};
                         fi;
                         ;;
                     --suffix*)
@@ -298,6 +307,10 @@ EOF
                 ;;
             7)
                 suffix="-$opt";
+                parse_state=0;
+                ;;
+            8)
+                rust_bin="$opt";
                 parse_state=0;
                 ;;
       esac
@@ -512,6 +525,6 @@ run_aspis() {
 parse_commands "$@"
 perform_platform_checks $CLANG $OPT $LLVM_LINK
 if [[ "$rust_input" == true ]] && ! command -v "$RUSTC" >/dev/null 2>&1; then
-    error_msg "\nCommand rustc not found on PATH. Rust source files require rustc."
+    error_msg "\nCommand rustc not found. Expected path: ${RUSTC}. Please check --rust-bin parameter."
 fi
 run_aspis
