@@ -20,6 +20,7 @@ clang_options=
 eddi_options="-S"
 cfc_options="-S"
 llvm_bin=$(dirname "$(which clang)")
+rust_bin=$(dirname "$(which rustc)")
 suffix=""
 build_dir="."
 dup=0 # 0 = eddi,   1 = seddi,  2 = fdsc
@@ -28,6 +29,7 @@ debug_enabled=false
 verbose=false
 cleanup=true
 cpp_input=false
+rust_input=false
 enable_profiling=false
 
 # Check if the shell supports colors
@@ -104,7 +106,7 @@ parse_commands() {
 
     Usage: aspis.sh [options] file(s)...
 
-    The specified files can be any C source code files. 
+    The specified files can be any C, C++, or Rust source code files.
     By default, the compiler performs EDDI+CFCSS hardening.
 
     Options:
@@ -261,6 +263,10 @@ EOF
                             cpp_input=true
                         fi
                         ;;
+                    *.rs)
+                        input_files="$input_files $opt";
+                        rust_input=true;
+                        ;;
                     *)
                         clang_options="$clang_options $opt";
                         ;;
@@ -291,9 +297,9 @@ EOF
                 parse_state=0;
                 ;;
             7)
-              suffix="-$opt";
-              parse_state=0;
-              ;;
+                suffix="-$opt";
+                parse_state=0;
+                ;;
       esac
     done
 
@@ -322,6 +328,7 @@ EOF
     CLANGXX="${llvm_bin}/clang++${suffix}"
     OPT="${llvm_bin}/opt${suffix}"
     LLVM_LINK="${llvm_bin}/llvm-link${suffix}"
+    RUSTC="${rust_bin}/rustc"
 
     if [[ -n "$config_file" ]]; then
         CLANG="${CLANG} --config ${config_file}"
@@ -350,7 +357,14 @@ run_aspis() {
         # Extract the filename without extension
         filename=$(basename "$input_file" | sed 's/\.[^.]*$//')
         # Compile the file to LLVM IR (.ll) and save it in the build directory
-        exe $CLANG "$input_file" $clang_options -S -emit-llvm -O0 -Xclang -disable-O0-optnone -o "$build_dir/$filename.ll"
+        if [[ "$input_file" == *.rs ]]; then
+            # -C overflow-checks=off -C debug-assertions=off keep the IR free of calls to
+            # core::panicking::* that only a full rustc-driven link would resolve; together
+            # with opt-level=0 this is rustc's equivalent of clang's -O0 -disable-O0-optnone.
+            exe $RUSTC --crate-type=bin --emit=llvm-ir -C opt-level=0 -C overflow-checks=off -C debug-assertions=off -C panic=abort "$input_file" -o "$build_dir/$filename.ll"
+        else
+            exe $CLANG "$input_file" $clang_options -S -emit-llvm -O0 -Xclang -disable-O0-optnone -o "$build_dir/$filename.ll"
+        fi
     done
 
     ## LINK & PREPROCESS
@@ -358,11 +372,16 @@ run_aspis() {
 
     success_msg "Emitted and linked IR."
 
+    ## Translate any Rust link_section markers ("aspis_<annotation>") into regular ASPIS
+    ## annotations. A no-op on modules with none, so it is always safe to run.
+    exe $OPT -load-pass-plugin=$DIR/build/passes/libRUSTBRIDGE.so --passes="aspis-rust-annotation-bridge" $build_dir/out.ll -o $build_dir/out.ll
+    success_msg "Translated Rust annotations."
+
     if [[ $debug_enabled == false ]]; then
         exe $OPT --passes="strip" $build_dir/out.ll -o $build_dir/out.ll
         echo "  Debug mode disabled, stripped debug symbols."
     fi
-    
+    rustc
     exe $OPT --passes="lower-switch" $build_dir/out.ll -o $build_dir/out.ll
 
     ## FuncRetToRef
@@ -492,4 +511,7 @@ run_aspis() {
 
 parse_commands "$@"
 perform_platform_checks $CLANG $OPT $LLVM_LINK
+if [[ "$rust_input" == true ]] && ! command -v "$RUSTC" >/dev/null 2>&1; then
+    error_msg "\nCommand rustc not found on PATH. Rust source files require rustc."
+fi
 run_aspis
