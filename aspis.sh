@@ -33,47 +33,47 @@ enable_profiling=false
 # Check if the shell supports colors
 if [ -t 1 ]; then
 	ncolors=$(tput colors)
-	if test -n "$ncolors" && test $ncolors -ge 8; then
+	if test -n "$ncolors" && test "$ncolors" -ge 8; then
 		color_bold="$(tput bold)"
-		color_underline="$(tput smul)"
-		color_standout="$(tput smso)"
+		# color_underline="$(tput smul)"
+		# color_standout="$(tput smso)"
 		color_normal="$(tput sgr0)"
-		color_black="$(tput setaf 0)"
+		# color_black="$(tput setaf 0)"
 		color_red="$(tput setaf 1)"
 		color_green="$(tput setaf 2)"
-		color_yellow="$(tput setaf 3)"
-		color_blue="$(tput setaf 4)"
-		color_magenta="$(tput setaf 5)"
-		color_cyan="$(tput setaf 6)"
-		color_white="$(tput setaf 7)"
+		# color_yellow="$(tput setaf 3)"
+		# color_blue="$(tput setaf 4)"
+		# color_magenta="$(tput setaf 5)"
+		# color_cyan="$(tput setaf 6)"
+		# color_white="$(tput setaf 7)"
 	fi
 fi
 
 error_msg () {
     # Print error message
-    echo -e "\n${color_red}ERROR:${color_normal}" $@
+    echo -e "\n${color_red}ERROR:${color_normal}" "$@"
     exit 1
 }
 
 success_msg() {
-    echo -e "${color_green}\xE2\x9C\x94" $@ "${color_normal}"
+    echo -e "${color_green}\xE2\x9C\x94" "$@" "${color_normal}"
 }
 
 title_msg () {
-    echo -e "\n${color_bold}===" $@ "===${color_normal}"
+    echo -e "\n${color_bold}===" "$@" "===${color_normal}"
 }
 
 
 perform_platform_checks() {
-    if [ ! -f $1 ]; then
+    if [ ! -f "$1" ]; then
         error_msg "\nCommand clang not found. Expected path: ${1}. Please check --llvm-bin parameter."
     fi
 
-    if [ ! -f $2 ]; then
+    if [ ! -f "$2" ]; then
         error_msg "\nCommand opt not found. Expected path: ${2}. Please check --llvm-bin parameter."
     fi
 
-    if [ ! -f $3 ]; then
+    if [ ! -f "$3" ]; then
         error_msg "\nCommand llvm-link not found. Expected path: ${3}. Please check --llvm-bin parameter."
     fi
     
@@ -82,7 +82,7 @@ perform_platform_checks() {
 
 parse_commands() {
 
-    raw_opts="$@"
+    raw_opts="$*"
 
     for opt in $raw_opts; do
         case $parse_state in
@@ -186,21 +186,21 @@ EOF
                         if [[ ${#opt} -eq 9 ]]; then
                             parse_state=4;
                         else
-                            exclude_file=`echo "$opt" | cut -b 9`;
+                            exclude_file=$(echo "$opt" | cut -b 9);
                         fi;
                         ;;
                     --asmfiles*)
                         if [[ ${#opt} -eq 10 ]]; then
                             parse_state=5;
                         else
-                            asm_file=`echo "$opt" | cut -b 10`;
+                            asm_file=$(echo "$opt" | cut -b 10);
                         fi;
                         ;;
                     --build-dir*)
                         if [[ ${#opt} -eq 11 ]]; then
                             parse_state=6;
                         else
-                            build_dir=`echo "$opt" | cut -b 10`;
+                            build_dir=$(echo "$opt" | cut -b 10);
                         fi;
                         ;;
                     --eddi)
@@ -301,11 +301,11 @@ EOF
         echo "Verbose mode ON"
         # Function to display commands
         exe() { 
-            echo -e "\t\$ $@"
+            echo -e "\t\$ $*"
             "$@"
             local status=$?
             if [[ $status -ne 0 ]]; then
-                error_msg "Command FAILED: $@"
+                error_msg "Command FAILED: $*"
             fi
         }
     else
@@ -313,7 +313,7 @@ EOF
             "$@"
             local status=$?
             if [[ $status -ne 0 ]]; then
-                error_msg "Command FAILED: $@"
+                error_msg "Command FAILED: $*"
             fi 
         }
     fi
@@ -340,8 +340,8 @@ run_aspis() {
         error_msg "No input files provided."
     fi
 
-    exe mkdir -p $build_dir
-    exe rm -f $build_dir/*.ll
+    exe mkdir -p "$build_dir"
+    exe rm -f "$build_dir/*.ll"
 
     title_msg "Front-end and pre-processing"
 
@@ -350,61 +350,61 @@ run_aspis() {
         # Extract the filename without extension
         filename=$(basename "$input_file" | sed 's/\.[^.]*$//')
         # Compile the file to LLVM IR (.ll) and save it in the build directory
-        exe $CLANG "$input_file" $clang_options -S -emit-llvm -O0 -Xclang -disable-O0-optnone -o "$build_dir/$filename.ll"
+        exe "$CLANG" "$input_file" "$clang_options" -S -emit-llvm -O0 -Xclang -disable-O0-optnone -o "$build_dir/$filename.ll"
     done
 
     ## LINK & PREPROCESS
-    exe $LLVM_LINK $build_dir/*.ll -o $build_dir/out.ll
+    exe "$LLVM_LINK" "$build_dir/*.ll" -o "$build_dir/out.ll"
 
     success_msg "Emitted and linked IR."
 
     if [[ $debug_enabled == false ]]; then
-        exe $OPT --passes="strip" $build_dir/out.ll -o $build_dir/out.ll
+        exe "$OPT" --passes="strip" "$build_dir/out.ll" -o "$build_dir/out.ll"
         echo "  Debug mode disabled, stripped debug symbols."
     fi
     
-    exe $OPT --passes="lower-switch" $build_dir/out.ll -o $build_dir/out.ll
+    exe "$OPT" --passes="lower-switch" "$build_dir/out.ll" -o "$build_dir/out.ll"
 
     ## FuncRetToRef
     if [[ dup -ne -1 ]]; then
-        exe $OPT -load-pass-plugin=$DIR/build/passes/libEDDI.so --passes="func-ret-to-ref" $build_dir/out.ll -o $build_dir/out.ll
+        exe "$OPT" -load-pass-plugin="$DIR/build/passes/libEDDI.so" --passes="func-ret-to-ref" "$build_dir/out.ll" -o "$build_dir/out.ll"
     fi;
 
     title_msg "ASPIS transformations"
     ## DATA PROTECTION
     case $dup in
         0) 
-            exe $OPT -load-pass-plugin=$DIR/build/passes/libEDDI.so --passes="eddi-verify" $build_dir/out.ll -o $build_dir/out.ll $eddi_options
+            exe "$OPT" -load-pass-plugin="$DIR/build/passes/libEDDI.so" --passes="eddi-verify" "$build_dir/out.ll" -o "$build_dir/out.ll" "$eddi_options"
             ;;
         1) 
-            exe $OPT -load-pass-plugin=$DIR/build/passes/libSEDDI.so --passes="eddi-verify" $build_dir/out.ll -o $build_dir/out.ll $eddi_options
+            exe "$OPT" -load-pass-plugin="$DIR/build/passes/libSEDDI.so" --passes="eddi-verify" "$build_dir/out.ll" -o "$build_dir/out.ll" "$eddi_options"
             ;;
         2) 
-            exe $OPT -load-pass-plugin=$DIR/build/passes/libFDSC.so --passes="eddi-verify" $build_dir/out.ll -o $build_dir/out.ll $eddi_options
+            exe "$OPT" -load-pass-plugin="$DIR/build/passes/libFDSC.so" --passes="eddi-verify" "$build_dir/out.ll" -o "$build_dir/out.ll" "$eddi_options"
             ;;
         3)
-            exe $OPT -load-pass-plugin=$DIR/build/passes/libREDDI.so --passes="eddi-verify" $build_dir/out.ll -o $build_dir/out.ll $eddi_options
+            exe "$OPT" -load-pass-plugin="$DIR/build/passes/libREDDI.so" --passes="eddi-verify" "$build_dir/out.ll" -o "$build_dir/out.ll" "$eddi_options"
             ;;
         *)
             echo -e "\t--no-dup specified!"
     esac
     success_msg "Applied data protection passes."
 
-    exe $OPT --passes="simplifycfg" $build_dir/out.ll -o $build_dir/out.ll
+    exe "$OPT" --passes="simplifycfg" "$build_dir/out.ll" -o "$build_dir/out.ll"
 
     ## CONTROL-FLOW CHECKING
     case $cfc in
         0) 
-            exe $OPT -load-pass-plugin=$DIR/build/passes/libCFCSS.so --passes="cfcss-verify" $build_dir/out.ll -o $build_dir/out.ll $cfc_options
+            exe "$OPT" -load-pass-plugin="$DIR/build/passes/libCFCSS.so" --passes="cfcss-verify" "$build_dir/out.ll" -o "$build_dir/out.ll" "$cfc_options"
             ;;
         1) 
-            exe $OPT -load-pass-plugin=$DIR/build/passes/libRASM.so --passes="rasm-verify" $build_dir/out.ll -o $build_dir/out.ll $cfc_options
+            exe "$OPT" -load-pass-plugin="$DIR/build/passes/libRASM.so" --passes="rasm-verify" "$build_dir/out.ll" -o "$build_dir/out.ll" "$cfc_options"
             ;;
         2) 
-            exe $OPT -load-pass-plugin=$DIR/build/passes/libINTER_RASM.so --passes="rasm-verify" $build_dir/out.ll -o $build_dir/out.ll $cfc_options
+            exe "$OPT" -load-pass-plugin="$DIR/build/passes/libINTER_RASM.so" --passes="rasm-verify" "$build_dir/out.ll" -o "$build_dir/out.ll" "$cfc_options"
             ;;
         3)
-            exe $OPT -load-pass-plugin=$DIR/build/passes/libRACFED.so --passes="racfed-verify" $build_dir/out.ll -o $build_dir/out.ll $cfc_options
+            exe "$OPT" -load-pass-plugin="$DIR/build/passes/libRACFED.so" --passes="racfed-verify" "$build_dir/out.ll" -o "$build_dir/out.ll" "$cfc_options"
             ;;
         *)
             echo -e "\t--no-cfc specified!"
@@ -419,22 +419,22 @@ run_aspis() {
         done < "$exclude_file";
 
         ## Frontend & linking
-        exe mv $build_dir/out.ll $build_dir/out.ll.bak
-        exe rm $build_dir/*.ll
-        exe mv $build_dir/out.ll.bak $build_dir/out.ll
+        exe mv "$build_dir/out.ll" "$build_dir/out.ll.bak"
+        exe rm "$build_dir/*.ll"
+        exe mv "$build_dir/out.ll.bak" "$build_dir/out.ll"
         for input_file in $excluded_files; do
             # Extract the filename without extension
             filename=$(basename "$input_file" | sed 's/\.[^.]*$//')
             # Compile the file to LLVM IR (.ll) and save it in the build directory
-            exe $CLANG "$input_file" $clang_options -S -emit-llvm -Xclang -disable-O0-optnone -o "$build_dir/$filename.ll"
+            exe "$CLANG" "$input_file" "$clang_options" -S -emit-llvm -Xclang -disable-O0-optnone -o "$build_dir/$filename.ll"
         done
-        exe $LLVM_LINK $build_dir/*.ll -o $build_dir/out.ll
+        exe "$LLVM_LINK" "$build_dir/*.ll" -o "$build_dir/out.ll"
     fi;
     success_msg "Linked excluded files to the compilation."
 
     ## DuplicateGlobals
     if [[ dup -ne -1 ]]; then
-        exe $OPT -load-pass-plugin=$DIR/build/passes/libEDDI.so --passes="duplicate-globals" $build_dir/out.ll -o $build_dir/out.ll -S $eddi_options
+        exe "$OPT" -load-pass-plugin="$DIR/build/passes/libEDDI.so" --passes="duplicate-globals" "$build_dir/out.ll" -o "$build_dir/out.ll" -S "$eddi_options"
         success_msg "Duplicated globals."
     fi;
 
@@ -448,42 +448,42 @@ run_aspis() {
     fi;
 
     ## Backend
-    exe $OPT $build_dir/out.ll -o $build_dir/out.ll -S $opt_flags
+    exe "$OPT" "$build_dir/out.ll" -o "$build_dir/out.ll" -S
     if [[ "$enable_profiling" == "true" ]]; then
         title_msg "ASPIS Profiling"
-        exe $OPT -load-pass-plugin=$DIR/build/passes/libPROFILER.so --passes="aspis-insert-check-profile" $build_dir/out.ll -o $build_dir/out.ll -S
+        exe "$OPT" -load-pass-plugin="$DIR/build/passes/libPROFILER.so" --passes="aspis-insert-check-profile" "$build_dir/out.ll" -o "$build_dir/out.ll" -S
         success_msg "Code instrumented."
 
-        exe $LINKER $clang_options $build_dir/out.ll $asm_files -o $build_dir/$output_file
+        exe "$LINKER" "$clang_options" "$build_dir/out.ll" "$asm_files" -o "$build_dir/$output_file"
         success_msg "Instrumented binary emitted."
 
-        exe $build_dir/$output_file
+        exe "$build_dir/$output_file"
         success_msg "Profiled code executed."
 
         echo -e "Analyzing..."
-        exe $OPT -load-pass-plugin=$DIR/build/passes/libPROFILER.so --passes="aspis-check-profile" $build_dir/out.ll -o $build_dir/out.ll -S
+        exe "$OPT" -load-pass-plugin="$DIR/build/passes/libPROFILER.so" --passes="aspis-check-profile" "$build_dir/out.ll" -o "$build_dir/out.ll" -S
         exit
     fi;
 
     case $output_file in 
         *.ll)
-            exe cp $build_dir/out.ll $build_dir/$output_file.bak
+            exe cp "$build_dir/out.ll" "$build_dir/$output_file.bak"
             ;;
         *)
-            exe $LINKER $clang_options $build_dir/out.ll $asm_files -o $build_dir/$output_file
+            exe "$LINKER" "$clang_options" "$build_dir/out.ll" "$asm_files" -o "$build_dir/$output_file"
             ;;
     esac
     success_msg "Binary emitted."
 
     #Cleanup
     if [[ $cleanup == true ]]; then
-        rm -f $build_dir/*.ll
+        rm -f "$build_dir/*.ll"
         success_msg "Cleaned cached files."
     fi
 
     case $output_file in 
         *.ll)
-            exe mv $build_dir/$output_file.bak $build_dir/$output_file
+            exe mv "$build_dir/$output_file.bak" "$build_dir/$output_file"
             ;;
     esac
 
@@ -491,5 +491,5 @@ run_aspis() {
 }
 
 parse_commands "$@"
-perform_platform_checks $CLANG $OPT $LLVM_LINK
+perform_platform_checks "$CLANG" "$OPT" "$LLVM_LINK"
 run_aspis
