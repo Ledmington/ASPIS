@@ -1,7 +1,12 @@
-use aspis_annotations::aspis;
+// Needed to compile a source file without a Cargo.toml
+extern crate aspis_rust_annotations;
+
+use aspis_rust_annotations::aspis;
+
+use std::io::Write;
 
 #[aspis(to_harden)]
-pub static mut sum: i32 = 0;
+pub static mut SUM: i32 = 0;
 
 fn DataCorruption_Handler() {
     println!("ASPIS_FAULT_INJECTION_CAUGHT: DataCorruption_Handler");
@@ -25,12 +30,14 @@ fn main() {
             break;
         }
         unsafe {
-            sum += i;
+            SUM += i;
         }
         i += 1;
     }
 
-    println!("{}", sum);
+    unsafe {
+        println!("{}", SUM);
+    }
 }
 
 // expected output

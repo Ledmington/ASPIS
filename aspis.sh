@@ -373,8 +373,17 @@ run_aspis() {
         if [[ "$input_file" == *.rs ]]; then
             # -C overflow-checks=off -C debug-assertions=off keep the IR free of calls to
             # core::panicking::* that only a full rustc-driven link would resolve; together
-            # with opt-level=0 this is rustc's equivalent of clang's -O0 -disable-O0-optnone.
-            exe $RUSTC --crate-type=bin --emit=llvm-ir -C opt-level=0 -C overflow-checks=off -C debug-assertions=off -C panic=abort "$input_file" -o "$build_dir/$filename.ll"
+            # with opt-level=0 this is rustc's equivalent of '-O0 -disable-O0-optnone'.
+            exe $RUSTC \
+                --crate-type=bin \
+                --emit=llvm-ir \
+                -C opt-level=0 \
+                -C overflow-checks=off \
+                -C debug-assertions=off \
+                -C panic=abort \
+                -L dependency=$DIR/rust-annotations/target/release \
+                --extern aspis_rust_annotations=$DIR/rust-annotations/target/release/libaspis_rust_annotations.so \
+                "$input_file" -o "$build_dir/$filename.ll"
         else
             exe $CLANG "$input_file" $clang_options -S -emit-llvm -O0 -Xclang -disable-O0-optnone -o "$build_dir/$filename.ll"
         fi
@@ -385,8 +394,8 @@ run_aspis() {
 
     success_msg "Emitted and linked IR."
 
-    ## Translate any Rust link_section markers ("aspis_<annotation>") into regular ASPIS
-    ## annotations. A no-op on modules with none, so it is always safe to run.
+    ## Translate any Rust proc-macro annotations into regular ASPIS annotations.
+    ## This is effectively a no-op on modules with no Rust annotations, so it is always safe to run.
     exe $OPT -load-pass-plugin=$DIR/build/passes/libRUSTBRIDGE.so --passes="aspis-rust-annotation-bridge" $build_dir/out.ll -o $build_dir/out.ll
     success_msg "Translated Rust annotations."
 
