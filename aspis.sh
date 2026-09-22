@@ -341,7 +341,7 @@ run_aspis() {
     fi
 
     exe mkdir -p "$build_dir"
-    exe rm -f "$build_dir/*.ll"
+    exe rm -f "$build_dir"/*.ll
 
     title_msg "Front-end and pre-processing"
 
@@ -354,7 +354,7 @@ run_aspis() {
     done
 
     ## LINK & PREPROCESS
-    exe "$LLVM_LINK" "$build_dir/*.ll" -o "$build_dir/out.ll"
+    exe "$LLVM_LINK" "$build_dir"/*.ll -o "$build_dir/out.ll"
 
     success_msg "Emitted and linked IR."
 
@@ -420,7 +420,7 @@ run_aspis() {
 
         ## Frontend & linking
         exe mv "$build_dir/out.ll" "$build_dir/out.ll.bak"
-        exe rm "$build_dir/*.ll"
+        exe rm "$build_dir"/*.ll
         exe mv "$build_dir/out.ll.bak" "$build_dir/out.ll"
         for input_file in $excluded_files; do
             # Extract the filename without extension
@@ -428,7 +428,7 @@ run_aspis() {
             # Compile the file to LLVM IR (.ll) and save it in the build directory
             exe "$CLANG" "$input_file" "$clang_options" -S -emit-llvm -Xclang -disable-O0-optnone -o "$build_dir/$filename.ll"
         done
-        exe "$LLVM_LINK" "$build_dir/*.ll" -o "$build_dir/out.ll"
+        exe "$LLVM_LINK" "$build_dir"/*.ll -o "$build_dir/out.ll"
     fi;
     success_msg "Linked excluded files to the compilation."
 
@@ -477,7 +477,7 @@ run_aspis() {
 
     #Cleanup
     if [[ $cleanup == true ]]; then
-        rm -f "$build_dir/*.ll"
+        rm -f "$build_dir"/*.ll
         success_msg "Cleaned cached files."
     fi
 
