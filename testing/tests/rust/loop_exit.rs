@@ -8,12 +8,14 @@ use std::io::Write;
 #[aspis(to_harden)]
 pub static mut SUM: i32 = 0;
 
-fn DataCorruption_Handler() {
+#[no_mangle]
+extern "C" fn DataCorruption_Handler() {
     println!("ASPIS_FAULT_INJECTION_CAUGHT: DataCorruption_Handler");
     std::io::stdout().flush().unwrap();
 }
 
-fn SigMismatch_Handler() {
+#[no_mangle]
+extern "C" fn SigMismatch_Handler() {
     println!("ASPIS_FAULT_INJECTION_CAUGHT: SigMismatch_Handler");
     std::io::stdout().flush().unwrap();
 }
@@ -36,7 +38,8 @@ fn main() {
     }
 
     unsafe {
-        println!("{}", SUM);
+        let copy = SUM;
+        println!("{}", copy);
     }
 }
 
