@@ -403,7 +403,6 @@ run_aspis() {
         exe $OPT --passes="strip" $build_dir/out.ll -o $build_dir/out.ll
         echo "  Debug mode disabled, stripped debug symbols."
     fi
-    rustc
     exe $OPT --passes="lower-switch" $build_dir/out.ll -o $build_dir/out.ll
 
     ## FuncRetToRef
