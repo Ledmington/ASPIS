@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Runs a C/C++ file through the same pass pipeline as aspis.sh, stage
+"""Runs a C/C++/Rust file through the same pass pipeline as aspis.sh, stage
 by stage, and dumps the CFG (as .dot and .svg) of every function after each
 stage. Useful to see exactly which pass introduces which basic blocks.
 """
@@ -42,10 +42,15 @@ def parse_args():
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("source", help="C/C++ source file to run through the pipeline")
+    parser.add_argument("source", help="C/C++/Rust source file to run through the pipeline")
     parser.add_argument(
         "--llvm-bin",
         help="Directory containing clang/clang++/opt/llvm-link "
+        "(default: read from testing/config/llvm.toml, falls back to $PATH)",
+    )
+    parser.add_argument(
+        "--rust-bin",
+        help="Directory containing rustc, only needed for .rs sources "
         "(default: read from testing/config/llvm.toml, falls back to $PATH)",
     )
     parser.add_argument(
@@ -78,7 +83,9 @@ def parse_args():
     return parser.parse_args()
 
 
-def resolve_llvm_bin(explicit: str | None) -> Path:
+def resolve_bin(explicit: str | None, key: str, tool: str) -> Path:
+    """Returns explicit if given, else `key` from testing/config/llvm.toml, else the
+    directory of `tool` in $PATH."""
     if explicit:
         return Path(explicit)
 
@@ -88,16 +95,16 @@ def resolve_llvm_bin(explicit: str | None) -> Path:
             line = line.strip()
             if line.startswith("#"):
                 continue
-            m = re.search(r'llvm_bin\s*=\s*"([^"]+)"', line)
+            m = re.match(key + r'\s*=\s*"([^"]+)"', line)
             if m:
                 return Path(m.group(1))
 
-    clang = shutil.which("clang")
-    if not clang:
+    found = shutil.which(tool)
+    if not found:
         sys.exit(
-            "Cannot determine --llvm-bin: no testing/config/llvm.toml and no 'clang' in PATH"
+            f"Cannot determine --{key.replace('_', '-')}: not in testing/config/llvm.toml and no '{tool}' in PATH"
         )
-    return Path(clang).parent
+    return Path(found).parent
 
 
 def require_executable(path: Path) -> None:
@@ -178,12 +185,22 @@ def main() -> None:
     if not src.is_file():
         sys.exit(f"No such file: {src}")
 
-    llvm_bin = resolve_llvm_bin(args.llvm_bin)
+    llvm_bin = resolve_bin(args.llvm_bin, "llvm_bin", "clang")
     clang, clangxx, opt = (llvm_bin / name for name in ("clang", "clang++", "opt"))
 
     for tool in (clang, clangxx, opt):
         require_executable(tool)
-    frontend = clangxx if src.suffix in (".cpp", ".cc", ".cxx") else clang
+
+    is_rust = src.suffix == ".rs"
+    if is_rust:
+        rustc = resolve_bin(args.rust_bin, "rust_bin", "rustc") / "rustc"
+        require_executable(rustc)
+        macro_dir = DIR / "rust-annotations/target/release"
+        macro_lib = macro_dir / "libaspis_rust_annotations.so"
+        if not macro_lib.is_file():
+            sys.exit(
+                f"Cannot find {macro_lib}, build it with `cargo build --release` in rust-annotations/"
+            )
 
     if not shutil.which("dot"):
         sys.exit("Graphviz 'dot' not found in PATH")
@@ -203,8 +220,24 @@ def main() -> None:
     pipeline = Pipeline(opt, out_dir, llvm_debug_args)
 
     print("== Frontend ==")
-    subprocess.run(
-        [
+    if is_rust:
+        # Same flags as aspis.sh, see the comment there.
+        frontend_cmd = [
+            rustc,
+            "--crate-type=bin",
+            "--emit=llvm-ir",
+            "-C", "opt-level=0",
+            "-C", "overflow-checks=off",
+            "-C", "debug-assertions=off",
+            "-C", "panic=abort",
+            "-L", f"dependency={macro_dir}",
+            "--extern", f"aspis_rust_annotations={macro_lib}",
+            str(src),
+            "-o", str(pipeline.cur_ll),
+        ]
+    else:
+        frontend = clangxx if src.suffix in (".cpp", ".cc", ".cxx") else clang
+        frontend_cmd = [
             frontend,
             str(src),
             "-S",
@@ -214,11 +247,16 @@ def main() -> None:
             "-disable-O0-optnone",
             "-o",
             str(pipeline.cur_ll),
-        ],
-        check=True,
-    )
+        ]
+    subprocess.run(frontend_cmd, check=True)
     pipeline.snapshot("00_frontend")
     pipeline.stage_num = 1
+
+    if is_rust:
+        pipeline.run_stage(
+            "rust-annotation-bridge",
+            pipeline.opt_plugin_pass_cmd("libRUSTBRIDGE.so", "aspis-rust-annotation-bridge"),
+        )
 
     pipeline.run_stage("lower-switch", pipeline.opt_pass_cmd("lower-switch"))
     pipeline.run_stage(
