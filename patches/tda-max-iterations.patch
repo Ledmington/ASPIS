@@ -1,0 +1,40 @@
+diff --git a/src/TypeDeductionAnalysis.cpp b/src/TypeDeductionAnalysis.cpp
+index 8e0b983..daa217e 100644
+--- a/src/TypeDeductionAnalysis.cpp
++++ b/src/TypeDeductionAnalysis.cpp
+@@ -21,8 +21,9 @@ using namespace tda;
+ 
+ AnalysisKey TypeDeductionAnalysis::Key;
+ 
+-TypeDeductionAnalysis::Result TypeDeductionAnalysis::run(Module& m, ModuleAnalysisManager&) {
++TypeDeductionAnalysis::Result TypeDeductionAnalysis::run(Module& m, ModuleAnalysisManager&, unsigned maxIterations) {
+   LLVM_DEBUG(log().logln("[TypeDeductionAnalysis]", Logger::Magenta));
++  LLVM_DEBUG(log() << Logger::Blue << "[Max deduction iterations: " << maxIterations << "]\n" << Logger::Reset;);
+   Result result;
+ 
+   TypeDeductionAnalysisInfo::getInstance().initialize(m);
+@@ -49,6 +50,11 @@ TypeDeductionAnalysis::Result TypeDeductionAnalysis::run(Module& m, ModuleAnalys
+   // Continue deducing until a fix point is reached
+   unsigned iterations = 0;
+   while (changed) {
++    if (iterations >= maxIterations) {
++      errs() << "Warning: TypeDeductionAnalysis stopped after " << iterations
++             << " iterations without reaching a fixed point, deduced types may be incomplete\n";
++      break;
++    }
+     LLVM_DEBUG(log() << Logger::Blue << "[Deduction iteration " << iterations << "]\n"
+                      << Logger::Reset);
+     iterations++;
+diff --git a/src/TypeDeductionAnalysis.hpp b/src/TypeDeductionAnalysis.hpp
+index e6b5901..8a97f28 100644
+--- a/src/TypeDeductionAnalysis.hpp
++++ b/src/TypeDeductionAnalysis.hpp
+@@ -21,7 +21,7 @@ public:
+     llvm::DenseMap<llvm::Value*, TypeAliasSet> transparentTypes;
+   };
+ 
+-  Result run(llvm::Module& m, llvm::ModuleAnalysisManager&);
++  Result run(llvm::Module& m, llvm::ModuleAnalysisManager&, unsigned maxIterations = 999);
+ 
+ private:
+   std::list<llvm::Value*> deductionQueue;
