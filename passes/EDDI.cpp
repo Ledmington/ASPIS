@@ -1764,7 +1764,10 @@ PreservedAnalyses EDDI::run(Module &Md, ModuleAnalysisManager &AM) {
   // Fixing the duplicated constructors
   fixDuplicatedConstructors(Md);
 
-  deducedTypes = tda.run(Md, AM);
+  // Workaround: TDA's fixed point may never be reached on some modules, so we bound its iterations
+  constexpr unsigned int TDA_max_iterations = 5;
+  errs() << "Running TDA with at most " << TDA_max_iterations << " iterations\n";
+  deducedTypes = tda.run(Md, AM, TDA_max_iterations);
 
   // list of duplicated instructions to remove since they are equal to the original
   std::set<CallBase *> GrayAreaCallsToFix;
@@ -1781,6 +1784,12 @@ PreservedAnalyses EDDI::run(Module &Md, ModuleAnalysisManager &AM) {
 
     LLVM_DEBUG(dbgs() << "function arguments");
     // save the function arguments and their duplicates
+    // The entrypoint has always two arguments (argc and argv) which are not a duplicated pair.
+    const bool IsEntryPoint = Fn == Md.getFunction(entryPoint);
+    if(IsEntryPoint){
+      continue;
+    }
+
     for (int i = 0; i < Fn->arg_size(); i++) {
       Value *Arg, *ArgClone;
       if (!AlternateMemMapEnabled) {

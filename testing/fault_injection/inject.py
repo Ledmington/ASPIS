@@ -28,6 +28,11 @@ def default_llvm_bin() -> str:
         return tomllib.load(f)["llvm_bin"]
 
 
+def default_rust_bin() -> str | None:
+    with open(TESTING_DIR / "config" / "llvm.toml", "rb") as f:
+        return tomllib.load(f).get("rust_bin")
+
+
 def compile_with_aspis(
     source: Path, out_name: str, options: list[str], llvm_bin: str, build_dir: Path
 ) -> Path:
@@ -233,7 +238,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    parser.add_argument("--source", type=Path, default=DEFAULT_SOURCE)
+    parser.add_argument("--source", type=lambda p: Path(p).resolve(), default=DEFAULT_SOURCE)
     parser.add_argument(
         "--llvm-bin",
         default=None,
@@ -258,11 +263,15 @@ def main() -> int:
             file=sys.stderr,
         )
 
+    rust_options = []
+    if args.source.suffix == ".rs" and (rust_bin := default_rust_bin()):
+        rust_options = ["--rust-bin", rust_bin]
+
     print(f"Compiling hardened build ({args.data_technique} {args.cfc_technique})...")
     hardened = compile_with_aspis(
         args.source,
         "hardened",
-        [args.data_technique, args.cfc_technique],
+        [*rust_options, args.data_technique, args.cfc_technique],
         llvm_bin,
         args.build_dir,
     )
