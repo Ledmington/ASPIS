@@ -353,6 +353,15 @@ EOF
     else
         LINKER=$CLANG
     fi
+
+    # The IR emitted by rustc references the Rust standard library,
+    # which clang does not link by default
+    rust_link_flags=
+    if [[ "$rust_input" == true ]] && command -v "$RUSTC" >/dev/null 2>&1; then
+        rust_libdir=$($RUSTC --print target-libdir)
+        rust_std=$(basename "$(ls "$rust_libdir"/libstd-*.so | head -n 1)" .so)
+        rust_link_flags="-L$rust_libdir -l${rust_std#lib} -Wl,-rpath,$rust_libdir"
+    fi
 }
 
 run_aspis() {
@@ -494,7 +503,7 @@ run_aspis() {
         exe $OPT -load-pass-plugin=$DIR/build/passes/libPROFILER.so --passes="aspis-insert-check-profile" $build_dir/out.ll -o $build_dir/out.ll -S
         success_msg "Code instrumented."
 
-        exe $LINKER $clang_options $build_dir/out.ll $asm_files -o $build_dir/$output_file
+        exe $LINKER $clang_options $build_dir/out.ll $asm_files $rust_link_flags -o $build_dir/$output_file
         success_msg "Instrumented binary emitted."
 
         exe $build_dir/$output_file
@@ -510,7 +519,7 @@ run_aspis() {
             exe cp $build_dir/out.ll $build_dir/$output_file.bak
             ;;
         *)
-            exe $LINKER $clang_options $build_dir/out.ll $asm_files -o $build_dir/$output_file
+            exe $LINKER $clang_options $build_dir/out.ll $asm_files $rust_link_flags -o $build_dir/$output_file
             ;;
     esac
     success_msg "Binary emitted."
