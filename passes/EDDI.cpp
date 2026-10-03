@@ -1784,6 +1784,12 @@ PreservedAnalyses EDDI::run(Module &Md, ModuleAnalysisManager &AM) {
 
     LLVM_DEBUG(dbgs() << "function arguments");
     // save the function arguments and their duplicates
+    // The entrypoint has always two arguments (argc and argv) which are not a duplicated pair.
+    const bool IsEntryPoint = Fn == Md.getFunction(entryPoint);
+    if(IsEntryPoint){
+      continue;
+    }
+
     for (int i = 0; i < Fn->arg_size(); i++) {
       Value *Arg, *ArgClone;
       if (!AlternateMemMapEnabled) {
