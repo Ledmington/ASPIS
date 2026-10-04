@@ -15,6 +15,7 @@ DOCKER_SHARED_VOLUME = "/workspace/ASPIS/tmp"
 LOCAL_SHARED_VOLUME = "./tests/"
 DOCKER_COMPOSE_FILE = "../docker/docker-compose.yml"
 COMPARISON_COUNTER_PATH = "./build/comparison_counter.csv"
+RUST_ANNOTATIONS_DIR = "../rust-annotations/target/release"
 
 data_techniques = [
     "--no-dup",
@@ -93,11 +94,13 @@ def cleanup_out_ll(build_dir):
 
 
 # Compile without ASPIS to get expected output
-def compile_without_aspis(source_file, output_file, llvm_bin, build_dir):
+def compile_without_aspis(source_file, output_file, llvm_bin, build_dir, rust_bin=None):
     """Compile a file without ASPIS."""
-    command = (
-        f"{llvm_bin}/clang++ {source_file} -o {build_dir}/{output_file}.out --verbose"
-    )
+    if source_file.endswith(".rs"):
+        rustc = f"{rust_bin}/rustc" if rust_bin else "rustc"
+        command = f"{rustc} -C panic=abort -L dependency={RUST_ANNOTATIONS_DIR} --extern aspis_rust_annotations={RUST_ANNOTATIONS_DIR}/libaspis_rust_annotations.so {source_file} -o {build_dir}/{output_file}.out"
+    else:
+        command = f"{llvm_bin}/clang++ {source_file} -o {build_dir}/{output_file}.out --verbose"
     print(command)
     stdout, stderr, exit_code = run_command(command)
     if exit_code != 0:
@@ -164,6 +167,7 @@ def test_aspis(test_data, use_container, aspis_addopt, data_technique, cfc_techn
     """Run a single ASPIS test."""
     config = load_config()
     llvm_bin = config["llvm_bin"]
+    rust_bin = config.get("rust_bin")
     test_name = test_data["test_name"]
     source_file = test_data["source_file"]
 
@@ -193,13 +197,17 @@ def test_aspis(test_data, use_container, aspis_addopt, data_technique, cfc_techn
     source_path = os.path.join(TEST_DIR, source_file)
     if not os.path.exists(docker_build_dir + "/" + test_name + ".out"):
         print("Compiling without ASPIS to get expected output...")
-        compile_without_aspis(source_path, test_name, llvm_bin, docker_build_dir)
+        compile_without_aspis(
+            source_path, test_name, llvm_bin, docker_build_dir, rust_bin
+        )
 
     print("Executing binary compiled without ASPIS...")
     expected_output = execute_binary(local_build_dir, test_name)
     print(f"Expected output: {expected_output}")
 
     aspis_options = aspis_addopt + " " + data_technique + " " + cfc_technique
+    if source_file.endswith(".rs") and rust_bin:
+        aspis_options = f"--rust-bin {rust_bin} " + aspis_options
 
     test_name_complete = (
         f"{test_name}_{data_technique}_{cfc_technique}".replace("--", "")
