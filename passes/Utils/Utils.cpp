@@ -241,7 +241,9 @@ bool isToDuplicateName(StringRef FnMangledName) {
     if(FnName.find("std::ostream") != FnName.npos || 
         FnName.find("std::basic_ostream") != FnName.npos || 
         FnName.find("std::basic_ios") != FnName.npos || 
-        FnName.find("std::thread") != FnName.npos) {
+        FnName.find("std::thread") != FnName.npos ||
+        FnName.find("std::rt::lang_start") != FnName.npos || // Rust runtime entry, must run once
+        FnName.find("std::io::") != FnName.npos) { // Rust I/O (e.g. println!), must run once
       return false;
     }
 
