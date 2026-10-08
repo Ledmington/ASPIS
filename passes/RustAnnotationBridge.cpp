@@ -3,10 +3,12 @@
  * @brief  LLVM ModulePass that lets front-ends other than clang opt in to ASPIS annotations.
  *
  * Converts any global symbol marked with `#[unsafe(link_section = "aspis_<annotation>")]` to
- * the corresponding ASPIS `__attribute__((annotate("<annotation>")))`.
+ * the corresponding ASPIS `__attribute__((annotate("<annotation>")))`. Multiple annotations can
+ * be given as a comma-separated list, e.g. `link_section = "aspis_to_harden,aspis_exclude"`.
  *
  * ************************************************************************************************
  */
+#include "llvm/ADT/SmallVector.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/GlobalObject.h"
@@ -16,6 +18,8 @@
 #include "llvm/Pass.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Passes/PassPlugin.h"
+#include <optional>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -27,23 +31,17 @@ namespace
 {
   const StringRef SectionPrefix = "aspis_";
 
-  std::optional<std::string> getASPISAnnotation(GlobalObject &GO)
+  std::optional<StringRef> getASPISAnnotation(StringRef Entry)
   {
-    if (!GO.hasSection())
-    {
-      return std::nullopt;
-    }
-
-    StringRef Section = GO.getSection();
-    if (Section == "aspis_to_harden")
+    if (Entry == "aspis_to_harden")
     {
       return {"to_harden"};
     }
-    else if (Section == "aspis_to_duplicate")
+    else if (Entry == "aspis_to_duplicate")
     {
       return {"to_duplicate"};
     }
-    else if (Section == "aspis_exclude")
+    else if (Entry == "aspis_exclude")
     {
       return {"exclude"};
     }
@@ -52,6 +50,32 @@ namespace
       return std::nullopt;
     }
   }
+
+  // The section may hold a comma-separated list of markers, e.g.
+  // "aspis_to_harden, aspis_exclude". It is only treated as ASPIS annotations if every entry
+  // is a known marker; anything else is left untouched as a regular link section.
+  std::vector<std::string> getASPISAnnotations(GlobalObject &GO)
+  {
+    if (!GO.hasSection())
+    {
+      return {};
+    }
+
+    SmallVector<StringRef, 4> Entries;
+    GO.getSection().split(Entries, ',');
+
+    std::vector<std::string> Annotations;
+    for (StringRef Entry : Entries)
+    {
+      std::optional<StringRef> Annotation = getASPISAnnotation(Entry.trim());
+      if (!Annotation.has_value())
+      {
+        return {};
+      }
+      Annotations.emplace_back(Annotation.value());
+    }
+    return Annotations;
+  }
 } // namespace
 
 class RustAnnotationBridge : public PassInfoMixin<RustAnnotationBridge>
@@ -59,24 +83,24 @@ class RustAnnotationBridge : public PassInfoMixin<RustAnnotationBridge>
 public:
   PreservedAnalyses run(Module &Md, ModuleAnalysisManager &)
   {
-    std::vector<std::pair<GlobalObject *, StringRef>> ToAnnotate;
+    std::vector<std::pair<GlobalObject *, std::string>> ToAnnotate;
+
+    auto Collect = [&ToAnnotate](GlobalObject &GO)
+    {
+      for (std::string &Annotation : getASPISAnnotations(GO))
+      {
+        ToAnnotate.emplace_back(&GO, std::move(Annotation));
+      }
+    };
 
     for (GlobalVariable &GV : Md.globals())
     {
-      std::optional<std::string> Annotation = getASPISAnnotation(GV);
-      if (Annotation.has_value())
-      {
-        ToAnnotate.emplace_back(&GV, Annotation.value());
-      }
+      Collect(GV);
     }
 
     for (Function &Fn : Md)
     {
-      std::optional<std::string> Annotation = getASPISAnnotation(Fn);
-      if (Annotation.has_value())
-      {
-        ToAnnotate.emplace_back(&Fn, Annotation.value());
-      }
+      Collect(Fn);
     }
 
     if (ToAnnotate.empty())
@@ -98,7 +122,7 @@ public:
 
 private:
   static void addAnnotations(Module &Md,
-                             ArrayRef<std::pair<GlobalObject *, StringRef>> ToAnnotate)
+                             ArrayRef<std::pair<GlobalObject *, std::string>> ToAnnotate)
   {
     LLVMContext &Ctx = Md.getContext();
     auto *PtrTy = PointerType::getUnqual(Ctx);
