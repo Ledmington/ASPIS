@@ -98,7 +98,7 @@ def compile_without_aspis(source_file, output_file, llvm_bin, build_dir, rust_bi
     """Compile a file without ASPIS."""
     if source_file.endswith(".rs"):
         rustc = f"{rust_bin}/rustc" if rust_bin else "rustc"
-        command = f"{rustc} -C panic=abort -L dependency={RUST_ANNOTATIONS_DIR} --extern aspis_rust_annotations={RUST_ANNOTATIONS_DIR}/libaspis_rust_annotations.so {source_file} -o {build_dir}/{output_file}.out"
+        command = f"{rustc} -C panic=abort -L dependency={RUST_ANNOTATIONS_DIR} --extern aspis_rust_annotations={RUST_ANNOTATIONS_DIR}/libaspis_rust_annotations.so -A non_upper_case_globals {source_file} -o {build_dir}/{output_file}.out"
     else:
         command = f"{llvm_bin}/clang++ {source_file} -o {build_dir}/{output_file}.out --verbose"
     print(command)

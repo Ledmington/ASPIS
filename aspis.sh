@@ -439,7 +439,8 @@ run_aspis() {
     esac
     success_msg "Applied data protection passes."
 
-    exe $OPT --passes="simplifycfg" $build_dir/out.ll -o $build_dir/out.ll
+    ## simplifycfg may fold branch chains back into switches, which the CFC passes do not support
+    exe $OPT --passes="simplifycfg,lower-switch" $build_dir/out.ll -o $build_dir/out.ll
 
     ## CONTROL-FLOW CHECKING
     case $cfc in

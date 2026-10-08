@@ -1088,6 +1088,11 @@ void EDDI::compareValues(std::vector<Value *> *CmpInstructions, Value &V1, Value
 void EDDI::fixFuncValsPassedByReference(
     Instruction &I,
     IRBuilder<> &B) {
+  // When the original and the copy point to the same object (e.g. both point
+  // to a constant global) the sync is a no-op, but storing may still fault if
+  // that object lives in read-only memory. In that case we redirect the store
+  // to a scratch stack slot.
+  AllocaInst *Scratch = nullptr;
   int numOps = I.getNumOperands();
   for (int i = 0; i < numOps; i++) {
     Value *V = I.getOperand(i);
@@ -1100,10 +1105,25 @@ void EDDI::fixFuncValsPassedByReference(
         Value *Copy = Duplicate;
         if(Original->getType()->isPointerTy() && Copy->getType()->isPointerTy()) {
           Type *OriginalType = Original->getType();
+          if (Scratch == nullptr) {
+            BasicBlock &Entry = I.getFunction()->getEntryBlock();
+            IRBuilder<> EntryB(&Entry, Entry.getFirstInsertionPt());
+            Scratch = EntryB.CreateAlloca(OriginalType);
+            DuplicatedInstructionMap.insert(
+                std::pair<Instruction *, Instruction *>(Scratch, Scratch));
+          }
           Instruction *TmpLoad = B.CreateLoad(OriginalType, Original);
-          Instruction *TmpStore = B.CreateStore(TmpLoad, Copy);
+          Value *Same = B.CreateICmpEQ(Original, Copy);
+          Value *Target = B.CreateSelect(Same, Scratch, Copy);
+          Instruction *TmpStore = B.CreateStore(TmpLoad, Target);
           DuplicatedInstructionMap.insert(
               std::pair<Instruction *, Instruction *>(TmpLoad, TmpLoad));
+          for (Value *NewV : {Same, Target}) {
+            if (auto *NewI = dyn_cast<Instruction>(NewV)) {
+              DuplicatedInstructionMap.insert(
+                  std::pair<Instruction *, Instruction *>(NewI, NewI));
+            }
+          }
           DuplicatedInstructionMap.insert(
               std::pair<Instruction *, Instruction *>(TmpStore, TmpStore));
         }
