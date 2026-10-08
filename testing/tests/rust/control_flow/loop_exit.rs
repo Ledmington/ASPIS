@@ -21,7 +21,7 @@ pub extern "C" fn SigMismatch_Handler() {
     }
 }
 
-#[unsafe(link_section = "aspis_to_harden")]
+#[unsafe(link_section = ".data,aspis_to_harden")]
 #[unsafe(no_mangle)]
 pub static mut sum: i32 = 0;
 

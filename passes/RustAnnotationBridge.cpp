@@ -4,11 +4,13 @@
  *
  * Converts any global symbol marked with `#[unsafe(link_section = "aspis_<annotation>")]` to
  * the corresponding ASPIS `__attribute__((annotate("<annotation>")))`. Multiple annotations can
- * be given as a comma-separated list, e.g. `link_section = "aspis_to_harden,aspis_exclude"`.
+ * be given as a comma-separated list, e.g. `link_section = "aspis_to_harden,aspis_exclude"`, which
+ * may also contain a regular section (e.g. `".data,aspis_to_harden"`) that is kept on the symbol.
  *
  * ************************************************************************************************
  */
 #include "llvm/ADT/SmallVector.h"
+#include "llvm/ADT/StringExtras.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/GlobalObject.h"
@@ -51,10 +53,10 @@ namespace
     }
   }
 
-  // The section may hold a comma-separated list of markers, e.g.
-  // "aspis_to_harden, aspis_exclude". It is only treated as ASPIS annotations if every entry
-  // is a known marker; anything else is left untouched as a regular link section.
-  std::vector<std::string> getASPISAnnotations(GlobalObject &GO)
+  // The section may hold a comma-separated list mixing ASPIS markers with regular sections,
+  // e.g. ".data, aspis_to_harden". The ASPIS markers are stripped from the section and returned
+  // as annotations; the remaining entries are kept as the symbol's section.
+  std::vector<std::string> extractASPISAnnotations(GlobalObject &GO)
   {
     if (!GO.hasSection())
     {
@@ -65,14 +67,23 @@ namespace
     GO.getSection().split(Entries, ',');
 
     std::vector<std::string> Annotations;
+    SmallVector<StringRef, 4> Remaining;
     for (StringRef Entry : Entries)
     {
-      std::optional<StringRef> Annotation = getASPISAnnotation(Entry.trim());
-      if (!Annotation.has_value())
+      Entry = Entry.trim();
+      if (std::optional<StringRef> Annotation = getASPISAnnotation(Entry))
       {
-        return {};
+        Annotations.emplace_back(Annotation.value());
       }
-      Annotations.emplace_back(Annotation.value());
+      else
+      {
+        Remaining.push_back(Entry);
+      }
+    }
+
+    if (!Annotations.empty())
+    {
+      GO.setSection(join(Remaining, ","));
     }
     return Annotations;
   }
@@ -87,7 +98,7 @@ public:
 
     auto Collect = [&ToAnnotate](GlobalObject &GO)
     {
-      for (std::string &Annotation : getASPISAnnotations(GO))
+      for (std::string &Annotation : extractASPISAnnotations(GO))
       {
         ToAnnotate.emplace_back(&GO, std::move(Annotation));
       }
@@ -106,11 +117,6 @@ public:
     if (ToAnnotate.empty())
     {
       return PreservedAnalyses::all();
-    }
-
-    for (auto &[GV, Annotation] : ToAnnotate)
-    {
-      GV->setSection("");
     }
 
     addAnnotations(Md, ToAnnotate);
