@@ -366,6 +366,17 @@ run_aspis() {
         fi
     done
 
+    ## Rust programs that use std (i.e. not #![no_std]) reference symbols from Rust's standard
+    ## library, so the final link must pull in the toolchain's libstd. It is linked dynamically,
+    ## since a static link would need the allocator shim that only a rustc-driven link generates.
+    ## --as-needed keeps #![no_std] programs, which never reference it, free of the dependency.
+    rust_link_flags=""
+    if [[ "$rust_input" == true ]]; then
+        rust_lib_dir="$($RUSTC --print target-libdir)"
+        rust_std_lib="$(basename "$(ls "$rust_lib_dir"/libstd-*.so | head -n 1)" .so)"
+        rust_link_flags="-L$rust_lib_dir -Wl,-rpath,$rust_lib_dir -Wl,--push-state,--as-needed -l${rust_std_lib#lib} -Wl,--pop-state"
+    fi
+
     ## LINK & PREPROCESS
     exe $LLVM_LINK $build_dir/*.ll -o $build_dir/out.ll
 
@@ -408,7 +419,9 @@ run_aspis() {
     esac
     success_msg "Applied data protection passes."
 
-    exe $OPT --passes="simplifycfg" $build_dir/out.ll -o $build_dir/out.ll
+    ## simplifycfg can fold chains of comparisons back into switches, which the CFC passes
+    ## do not support, so lower them again.
+    exe $OPT --passes="simplifycfg,lower-switch" $build_dir/out.ll -o $build_dir/out.ll
 
     ## CONTROL-FLOW CHECKING
     case $cfc in
@@ -472,7 +485,7 @@ run_aspis() {
         exe $OPT -load-pass-plugin=$DIR/build/passes/libPROFILER.so --passes="aspis-insert-check-profile" $build_dir/out.ll -o $build_dir/out.ll -S
         success_msg "Code instrumented."
 
-        exe $LINKER $clang_options $build_dir/out.ll $asm_files -o $build_dir/$output_file
+        exe $LINKER $clang_options $build_dir/out.ll $asm_files $rust_link_flags -o $build_dir/$output_file
         success_msg "Instrumented binary emitted."
 
         exe $build_dir/$output_file
@@ -488,7 +501,7 @@ run_aspis() {
             exe cp $build_dir/out.ll $build_dir/$output_file.bak
             ;;
         *)
-            exe $LINKER $clang_options $build_dir/out.ll $asm_files -o $build_dir/$output_file
+            exe $LINKER $clang_options $build_dir/out.ll $asm_files $rust_link_flags -o $build_dir/$output_file
             ;;
     esac
     success_msg "Binary emitted."

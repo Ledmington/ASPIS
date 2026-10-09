@@ -7,14 +7,23 @@
  * be given as a comma-separated list, e.g. `link_section = "aspis_to_harden,aspis_exclude"`, which
  * may also contain a regular section (e.g. `".data,aspis_to_harden"`) that is kept on the symbol.
  *
+ * For programs using Rust's std, it also marks the rustc-generated startup code (the C `main`,
+ * `std::rt::lang_start` and the closures/shims only it uses) as `exclude`. That code is entered
+ * from libstd through function pointers, which the control-flow checks cannot follow; excluding
+ * it makes the user's `main` the first hardened function to run, as it is for C programs.
+ *
  * ************************************************************************************************
  */
+#include "llvm/ADT/SetVector.h"
+#include "llvm/ADT/SmallPtrSet.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/GlobalObject.h"
 #include "llvm/IR/GlobalVariable.h"
+#include "llvm/IR/InstIterator.h"
+#include "llvm/IR/Instructions.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/PassManager.h"
 #include "llvm/Pass.h"
@@ -87,6 +96,93 @@ namespace
     }
     return Annotations;
   }
+  // Whether every use of V, looking through constant expressions and initializers, lies in
+  // Glue: in an instruction of one of its functions, or in the initializer of one of its globals.
+  bool isOnlyUsedBy(const Value *V, const SetVector<GlobalObject *> &Glue)
+  {
+    for (const User *U : V->users())
+    {
+      if (const auto *I = dyn_cast<Instruction>(U))
+      {
+        if (!Glue.contains(const_cast<Function *>(I->getFunction())))
+        {
+          return false;
+        }
+      }
+      else if (const auto *GO = dyn_cast<GlobalObject>(U))
+      {
+        if (!Glue.contains(const_cast<GlobalObject *>(GO)))
+        {
+          return false;
+        }
+      }
+      else if (!isa<Constant>(U) || !isOnlyUsedBy(U, Glue))
+      {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  // Collects the startup code rustc emits for a `fn main()` using std: a C `main` that calls
+  // `std::rt::lang_start(<user main>, ...)`, plus every non-exported function or global that is
+  // only reachable from that code (closures, vtables, FnOnce shims, Termination::report, ...).
+  // The user's main is never included. Returns an empty set for #![no_main] and C programs.
+  SetVector<GlobalObject *> findRustStartupGlue(Module &Md)
+  {
+    SetVector<GlobalObject *> Glue;
+
+    Function *CMain = Md.getFunction("main");
+    if (CMain == nullptr || CMain->isDeclaration())
+    {
+      return Glue;
+    }
+
+    Function *UserMain = nullptr;
+    for (Instruction &I : instructions(*CMain))
+    {
+      auto *Call = dyn_cast<CallBase>(&I);
+      Function *Callee = Call ? Call->getCalledFunction() : nullptr;
+      if (Callee == nullptr || Callee->isDeclaration() || !Callee->getName().contains("lang_start") ||
+          Call->arg_empty())
+      {
+        continue;
+      }
+      UserMain = dyn_cast<Function>(Call->getArgOperand(0)->stripPointerCasts());
+      if (UserMain != nullptr)
+      {
+        Glue.insert(CMain);
+        Glue.insert(Callee);
+        break;
+      }
+    }
+
+    if (UserMain == nullptr)
+    {
+      return Glue;
+    }
+
+    bool Changed = true;
+    while (Changed)
+    {
+      Changed = false;
+      for (GlobalObject &GO : Md.global_objects())
+      {
+        if (&GO == UserMain || Glue.contains(&GO) || GO.isDeclaration() ||
+            !(GO.hasLocalLinkage() || GO.hasHiddenVisibility()) || GO.use_empty())
+        {
+          continue;
+        }
+        if (isOnlyUsedBy(&GO, Glue))
+        {
+          Glue.insert(&GO);
+          Changed = true;
+        }
+      }
+    }
+
+    return Glue;
+  }
 } // namespace
 
 class RustAnnotationBridge : public PassInfoMixin<RustAnnotationBridge>
@@ -112,6 +208,14 @@ public:
     for (Function &Fn : Md)
     {
       Collect(Fn);
+    }
+
+    for (GlobalObject *GO : findRustStartupGlue(Md))
+    {
+      if (auto *Fn = dyn_cast<Function>(GO))
+      {
+        ToAnnotate.emplace_back(Fn, "exclude");
+      }
     }
 
     if (ToAnnotate.empty())
