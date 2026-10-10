@@ -1,24 +1,15 @@
-#![no_std]
-#![no_main]
-
-unsafe extern "C" {
-    fn printf(fmt: *const u8, ...) -> i32;
-    fn fflush(stream: *mut core::ffi::c_void) -> i32;
-}
+use std::io::Write;
 
 #[unsafe(no_mangle)]
 pub extern "C" fn DataCorruption_Handler() {
-    unsafe {
-        printf(b"ASPIS_FAULT_INJECTION_CAUGHT: DataCorruption_Handler\n\0".as_ptr());
-        fflush(core::ptr::null_mut());
-    }
+    println!("ASPIS_FAULT_INJECTION_CAUGHT: DataCorruption_Handler");
+    std::io::stdout().flush().unwrap();
 }
+
 #[unsafe(no_mangle)]
 pub extern "C" fn SigMismatch_Handler() {
-    unsafe {
-        printf(b"ASPIS_FAULT_INJECTION_CAUGHT: SigMismatch_Handler\n\0".as_ptr());
-        fflush(core::ptr::null_mut());
-    }
+    println!("ASPIS_FAULT_INJECTION_CAUGHT: SigMismatch_Handler");
+    std::io::stdout().flush().unwrap();
 }
 
 struct MyClass {
@@ -32,9 +23,7 @@ impl MyClass {
     }
 
     fn print(&self) {
-        unsafe {
-            printf(b"%d, %d\n\0".as_ptr(), self.a, self.b);
-        }
+        println!("{}, {}", self.a, self.b);
     }
 }
 
@@ -45,39 +34,23 @@ struct DerivedClass {
 
 impl DerivedClass {
     fn print(&self) {
-        unsafe {
-            printf(b"%d, %d, %d\n\0".as_ptr(), self.base.a, self.base.b, self.c);
-        }
+        println!("{}, {}, {}", self.base.a, self.base.b, self.c);
     }
 }
 
 #[unsafe(link_section = "aspis_to_harden")]
-#[unsafe(no_mangle)]
-pub static mut derived_obj: DerivedClass = DerivedClass {
+static mut DERIVED_OBJ: DerivedClass = DerivedClass {
     base: MyClass { a: 3, b: 6 },
     c: 9,
 };
 
-#[unsafe(no_mangle)]
-pub extern "C" fn main() -> i32 {
+fn main() {
     // Test class and member function
     let my_obj = MyClass { a: 5, b: 7 };
-    unsafe {
-        printf(b"%d\n\0".as_ptr(), my_obj.sum());
-    }
+    println!("{}", my_obj.sum());
     my_obj.print();
 
     // Test derived class with overridden "virtual" function
-    unsafe {
-        derived_obj.print();
-    }
-    0
+    let derived_obj = unsafe { &*(&raw const DERIVED_OBJ) };
+    derived_obj.print();
 }
-
-#[panic_handler]
-fn panic(_info: &core::panic::PanicInfo) -> ! {
-    loop {}
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn rust_eh_personality() {}

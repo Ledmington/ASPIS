@@ -1,47 +1,25 @@
-#![no_std]
-#![no_main]
-
-unsafe extern "C" {
-    fn printf(fmt: *const u8, ...) -> i32;
-    fn fflush(stream: *mut core::ffi::c_void) -> i32;
-}
+use std::io::Write;
 
 #[unsafe(no_mangle)]
 pub extern "C" fn DataCorruption_Handler() {
-    unsafe {
-        printf(b"ASPIS_FAULT_INJECTION_CAUGHT: DataCorruption_Handler\n\0".as_ptr());
-        fflush(core::ptr::null_mut());
-    }
+    println!("ASPIS_FAULT_INJECTION_CAUGHT: DataCorruption_Handler");
+    std::io::stdout().flush().unwrap();
 }
+
 #[unsafe(no_mangle)]
 pub extern "C" fn SigMismatch_Handler() {
-    unsafe {
-        printf(b"ASPIS_FAULT_INJECTION_CAUGHT: SigMismatch_Handler\n\0".as_ptr());
-        fflush(core::ptr::null_mut());
-    }
+    println!("ASPIS_FAULT_INJECTION_CAUGHT: SigMismatch_Handler");
+    std::io::stdout().flush().unwrap();
 }
 
 // Simulate memory-mapped I/O: not annotated, read through a volatile load so it
 // isn't folded to a constant before ASPIS ever sees it.
-#[unsafe(no_mangle)]
-pub static mut io_port: i32 = 42;
+static mut IO_PORT: i32 = 42;
 
-#[unsafe(no_mangle)]
-pub extern "C" fn main() -> i32 {
-    unsafe {
-        let x = core::ptr::read_volatile(&raw const io_port);
-        printf(b"%d\0".as_ptr(), x);
-    }
-    0
+fn main() {
+    let x = unsafe { std::ptr::read_volatile(&raw const IO_PORT) };
+    println!("{}", x);
 }
-
-#[panic_handler]
-fn panic(_info: &core::panic::PanicInfo) -> ! {
-    loop {}
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn rust_eh_personality() {}
 
 // expected output
 // 42
