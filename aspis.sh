@@ -28,6 +28,7 @@ debug_enabled=false
 verbose=false
 cleanup=true
 cpp_input=false
+rust_input=false
 enable_profiling=false
 
 # Check if the shell supports colors
@@ -104,7 +105,7 @@ parse_commands() {
 
     Usage: aspis.sh [options] file(s)...
 
-    The specified files can be any C source code files. 
+    The specified files can be any C, C++, or Rust source code files.
     By default, the compiler performs EDDI+CFCSS hardening.
 
     Options:
@@ -261,6 +262,10 @@ EOF
                             cpp_input=true
                         fi
                         ;;
+                    *.rs)
+                        input_files="$input_files $opt";
+                        rust_input=true;
+                        ;;
                     *)
                         clang_options="$clang_options $opt";
                         ;;
@@ -322,6 +327,7 @@ EOF
     CLANGXX="${llvm_bin}/clang++${suffix}"
     OPT="${llvm_bin}/opt${suffix}"
     LLVM_LINK="${llvm_bin}/llvm-link${suffix}"
+    RUSTC="rustc"
 
     if [[ -n "$config_file" ]]; then
         CLANG="${CLANG} --config ${config_file}"
@@ -350,13 +356,36 @@ run_aspis() {
         # Extract the filename without extension
         filename=$(basename "$input_file" | sed 's/\.[^.]*$//')
         # Compile the file to LLVM IR (.ll) and save it in the build directory
-        exe $CLANG "$input_file" $clang_options -S -emit-llvm -O0 -Xclang -disable-O0-optnone -o "$build_dir/$filename.ll"
+        if [[ "$input_file" == *.rs ]]; then
+            # -C overflow-checks=off -C debug-assertions=off keep the IR free of calls to
+            # core::panicking::* that only a full rustc-driven link would resolve; together
+            # with opt-level=0 this is rustc's equivalent of clang's -O0 -disable-O0-optnone.
+            exe $RUSTC --crate-type=bin --emit=llvm-ir -C opt-level=0 -C overflow-checks=off -C debug-assertions=off -C panic=abort "$input_file" -o "$build_dir/$filename.ll"
+        else
+            exe $CLANG "$input_file" $clang_options -S -emit-llvm -O0 -Xclang -disable-O0-optnone -o "$build_dir/$filename.ll"
+        fi
     done
+
+    ## Rust programs that use std (i.e. not #![no_std]) reference symbols from Rust's standard
+    ## library, so the final link must pull in the toolchain's libstd. It is linked dynamically,
+    ## since a static link would need the allocator shim that only a rustc-driven link generates.
+    ## --as-needed keeps #![no_std] programs, which never reference it, free of the dependency.
+    rust_link_flags=""
+    if [[ "$rust_input" == true ]]; then
+        rust_lib_dir="$($RUSTC --print target-libdir)"
+        rust_std_lib="$(basename "$(ls "$rust_lib_dir"/libstd-*.so | head -n 1)" .so)"
+        rust_link_flags="-L$rust_lib_dir -Wl,-rpath,$rust_lib_dir -Wl,--push-state,--as-needed -l${rust_std_lib#lib} -Wl,--pop-state"
+    fi
 
     ## LINK & PREPROCESS
     exe $LLVM_LINK $build_dir/*.ll -o $build_dir/out.ll
 
     success_msg "Emitted and linked IR."
+
+    ## Translate any Rust link_section markers ("aspis_<annotation>") into regular ASPIS
+    ## annotations. A no-op on modules with none, so it is always safe to run.
+    exe $OPT -load-pass-plugin=$DIR/build/passes/libRUSTBRIDGE.so --passes="aspis-rust-annotation-bridge" $build_dir/out.ll -o $build_dir/out.ll
+    success_msg "Translated Rust annotations."
 
     if [[ $debug_enabled == false ]]; then
         exe $OPT --passes="strip" $build_dir/out.ll -o $build_dir/out.ll
@@ -390,7 +419,9 @@ run_aspis() {
     esac
     success_msg "Applied data protection passes."
 
-    exe $OPT --passes="simplifycfg" $build_dir/out.ll -o $build_dir/out.ll
+    ## simplifycfg can fold chains of comparisons back into switches, which the CFC passes
+    ## do not support, so lower them again.
+    exe $OPT --passes="simplifycfg,lower-switch" $build_dir/out.ll -o $build_dir/out.ll
 
     ## CONTROL-FLOW CHECKING
     case $cfc in
@@ -454,7 +485,7 @@ run_aspis() {
         exe $OPT -load-pass-plugin=$DIR/build/passes/libPROFILER.so --passes="aspis-insert-check-profile" $build_dir/out.ll -o $build_dir/out.ll -S
         success_msg "Code instrumented."
 
-        exe $LINKER $clang_options $build_dir/out.ll $asm_files -o $build_dir/$output_file
+        exe $LINKER $clang_options $build_dir/out.ll $asm_files $rust_link_flags -o $build_dir/$output_file
         success_msg "Instrumented binary emitted."
 
         exe $build_dir/$output_file
@@ -470,7 +501,7 @@ run_aspis() {
             exe cp $build_dir/out.ll $build_dir/$output_file.bak
             ;;
         *)
-            exe $LINKER $clang_options $build_dir/out.ll $asm_files -o $build_dir/$output_file
+            exe $LINKER $clang_options $build_dir/out.ll $asm_files $rust_link_flags -o $build_dir/$output_file
             ;;
     esac
     success_msg "Binary emitted."
@@ -492,4 +523,7 @@ run_aspis() {
 
 parse_commands "$@"
 perform_platform_checks $CLANG $OPT $LLVM_LINK
+if [[ "$rust_input" == true ]] && ! command -v "$RUSTC" >/dev/null 2>&1; then
+    error_msg "\nCommand rustc not found on PATH. Rust source files require rustc."
+fi
 run_aspis
