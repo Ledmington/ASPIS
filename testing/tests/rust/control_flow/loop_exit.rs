@@ -5,6 +5,7 @@ pub extern "C" fn DataCorruption_Handler() {
     println!("ASPIS_FAULT_INJECTION_CAUGHT: DataCorruption_Handler");
     std::io::stdout().flush().unwrap();
 }
+
 #[unsafe(no_mangle)]
 pub extern "C" fn SigMismatch_Handler() {
     println!("ASPIS_FAULT_INJECTION_CAUGHT: SigMismatch_Handler");
@@ -30,5 +31,8 @@ fn main() {
         }
         i += 1;
     }
-    print!("{}", unsafe { sum });
+    unsafe {
+        let copy = sum;
+        println!("{}", copy);
+    }
 }
