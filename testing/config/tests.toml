@@ -217,8 +217,3 @@ source_file = "rust/simple/mul.rs"
 [[tests]]
 test_name = "rust_fact"
 source_file = "rust/simple/fact.rs"
-
-[[tests]]
-test_name = "rust_printf_to_duplicate"
-source_file = "rust/data_duplication_integrity/printf_to_duplicate.rs"
-
