@@ -242,6 +242,7 @@ bool isToDuplicateName(StringRef FnMangledName) {
         FnName.find("std::basic_ostream") != FnName.npos || 
         FnName.find("std::basic_ios") != FnName.npos || 
         FnName.find("std::thread") != FnName.npos ||
+        FnName.find("std::io::") != FnName.npos ||
         FnName.find("std::rt::lang_start") != FnName.npos) {
       return false;
     }
