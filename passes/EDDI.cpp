@@ -1783,8 +1783,11 @@ PreservedAnalyses EDDI::run(Module &Md, ModuleAnalysisManager &AM) {
     BasicBlock *ErrBB = BasicBlock::Create(Fn->getContext(), "ErrBB", Fn);
 
     LLVM_DEBUG(dbgs() << "function arguments");
-    // save the function arguments and their duplicates
-    for (int i = 0; i < Fn->arg_size(); i++) {
+    // save the function arguments and their duplicates.
+    // The entry point is protected in place, so its arguments are not duplicated
+    // and must not be paired with each other.
+    bool hasDuplicatedArgs = Fn->getName().ends_with("_dup");
+    for (int i = 0; hasDuplicatedArgs && i < Fn->arg_size(); i++) {
       Value *Arg, *ArgClone;
       if (!AlternateMemMapEnabled) {
         if (i >= Fn->arg_size() / 2) {
