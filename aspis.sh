@@ -357,10 +357,7 @@ run_aspis() {
         filename=$(basename "$input_file" | sed 's/\.[^.]*$//')
         # Compile the file to LLVM IR (.ll) and save it in the build directory
         if [[ "$input_file" == *.rs ]]; then
-            # -C overflow-checks=off -C debug-assertions=off keep the IR free of calls to
-            # core::panicking::* that only a full rustc-driven link would resolve; together
-            # with opt-level=0 this is rustc's equivalent of clang's -O0 -disable-O0-optnone.
-            exe $RUSTC --crate-type=bin --emit=llvm-ir -C opt-level=0 -C overflow-checks=off -C debug-assertions=off -C panic=abort "$input_file" -o "$build_dir/$filename.ll"
+            exe $RUSTC --crate-type=bin --emit=llvm-ir -C opt-level=0 -C panic=abort "$input_file" -o "$build_dir/$filename.ll"
         else
             exe $CLANG "$input_file" $clang_options -S -emit-llvm -O0 -Xclang -disable-O0-optnone -o "$build_dir/$filename.ll"
         fi

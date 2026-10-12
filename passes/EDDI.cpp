@@ -412,8 +412,9 @@ void EDDI::preprocess(Module &Md) {
   while(!toCheckVariables.empty()){
     std::set<Value *> toAddVariables; // support set to contain new to-be-checked values
     for(Value *V : toCheckVariables) {
-      // Just protect the return value of the call, not the operands
-      if((isa<Instruction>(V) || isa<GEPOperator>(V)) && !isa<CallBase>(V)) {
+      // Just protect the return value of the call, not the operands, unless it is
+      // overflow-checked arithmetic (e.g. from rustc's overflow checks)
+      if((isa<Instruction>(V) || isa<GEPOperator>(V)) && (!isa<CallBase>(V) || isa<WithOverflowInst>(V))) {
         auto Instr = cast<User>(V);
 
         // Check parameters of function
