@@ -70,10 +70,7 @@ def cleanup_out_ll(build_dir):
 def compile_without_aspis(source_file, output_file, llvm_bin, build_dir):
   """Compile a file without ASPIS."""
   if source_file.endswith(".rs"):
-    # no_std binaries pass -nodefaultlibs by default, so libc (printf, __libc_start_main, ...)
-    # needs to be relinked explicitly; the ASPIS-hardened build doesn't go through this path,
-    # it links the emitted IR directly with clang, which pulls in the default libraries.
-    command = f"rustc -C panic=abort -C link-args=-lc {source_file} -o {build_dir}/{output_file}.out"
+    command = f"rustc -C panic=abort {source_file} -o {build_dir}/{output_file}.out"
   else:
     command = f"{llvm_bin}/clang++ {source_file} -o {build_dir}/{output_file}.out --verbose"
   print(command)

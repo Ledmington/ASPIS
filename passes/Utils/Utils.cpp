@@ -260,7 +260,7 @@ bool isToExcludeName(StringRef FnMangledName) {
 
   auto FnName = demangle(FnMangledName.str());
 
-  // The Rust runtime entry point must run exactly once
+  // The Rust runtime entry point must run only once
   if(FnName.find("std::thread") != FnName.npos ||
       FnName.find("std::rt::lang_start") != FnName.npos) {
     return true;

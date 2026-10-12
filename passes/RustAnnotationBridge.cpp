@@ -1,16 +1,11 @@
 /**
  * ************************************************************************************************
- * @brief  LLVM ModulePass that lets front-ends other than clang opt in to ASPIS annotations.
+ * @brief  LLVM ModulePass that lets Rust front-end use ASPIS annotations.
  *
  * Converts any global symbol marked with `#[unsafe(link_section = "aspis_<annotation>")]` to
  * the corresponding ASPIS `__attribute__((annotate("<annotation>")))`. Multiple annotations can
  * be given as a comma-separated list, e.g. `link_section = "aspis_to_harden,aspis_exclude"`, which
  * may also contain a regular section (e.g. `".data,aspis_to_harden"`) that is kept on the symbol.
- *
- * For programs using Rust's std, it also marks the rustc-generated startup code (the C `main`,
- * `std::rt::lang_start` and the closures/shims only it uses) as `exclude`. That code is entered
- * from libstd through function pointers, which the control-flow checks cannot follow; excluding
- * it makes the user's `main` the first hardened function to run, as it is for C programs.
  *
  * ************************************************************************************************
  */
@@ -62,9 +57,9 @@ namespace
     }
   }
 
-  // The section may hold a comma-separated list mixing ASPIS markers with regular sections,
-  // e.g. ".data, aspis_to_harden". The ASPIS markers are stripped from the section and returned
-  // as annotations; the remaining entries are kept as the symbol's section.
+  // The section may hold a comma-separated list containing both ASPIS markers and regular sections,
+  // e.g. ".data, aspis_to_harden". The ASPIS markers are removed and returned as annotations;
+  // the remaining entries are kept as the symbol's section.
   std::vector<std::string> extractASPISAnnotations(GlobalObject &GO)
   {
     if (!GO.hasSection())
@@ -96,6 +91,7 @@ namespace
     }
     return Annotations;
   }
+
   // Whether every use of V, looking through constant expressions and initializers, lies in
   // Glue: in an instruction of one of its functions, or in the initializer of one of its globals.
   bool isOnlyUsedBy(const Value *V, const SetVector<GlobalObject *> &Glue)
@@ -125,9 +121,9 @@ namespace
   }
 
   // Collects the startup code rustc emits for a `fn main()` using std: a C `main` that calls
-  // `std::rt::lang_start(<user main>, ...)`, plus every non-exported function or global that is
-  // only reachable from that code (closures, vtables, FnOnce shims, Termination::report, ...).
-  // The user's main is never included. Returns an empty set for #![no_main] and C programs.
+  // `std::rt::lang_start(...)`, plus every non-exported function or global that is only
+  // reachable from that code.
+  // The user's main is never included.
   SetVector<GlobalObject *> findRustStartupGlue(Module &Md)
   {
     SetVector<GlobalObject *> Glue;
