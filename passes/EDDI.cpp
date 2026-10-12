@@ -1980,7 +1980,7 @@ PreservedAnalyses EDDI::run(Module &Md, ModuleAnalysisManager &AM) {
       // Create alloca and memcpy only if ptr since if it is a value, we can just pass two times the same value
       if(Arg->getType()->isPointerTy() && !CInstr->isByValArgument(i) && isa<Instruction>(Arg) && !isa<CallInst>(Arg))
       {
-        // If cannot perform TAD, do not duplicate Arg
+        // If cannot perform TDA, do not duplicate Arg
         temporaryArgumentDuplication(Md, Arg, B);
       } else {
         // Otherwise pass two times the same arg
@@ -2063,18 +2063,61 @@ bool EDDI::temporaryArgumentDuplication(Module &Md, llvm::Value *value, IRBuilde
     return false;
   }
 
-  tda::TransparentType *VTy = TTIter->second.begin()->get();
+  // TDA may deduce multiple types for the same value. They are stored in an unordered_set
+  // keyed by pointer, so its iteration order is not deterministic: pick a candidate explicitly.
   // Cannot do argument duplication if the type contains opaque pointers since we cannot find the final value to duplicate
-  {
-    auto VTyCopy = VTy;
-    while(VTyCopy->isPointerTT()) {
-      if (VTyCopy->isOpaquePtr()) {
-        errs() << "Warning! TAD value contains opaque pointer " << *value << "\n";
-        return false;
-      }
+  // Prints the pointed type (the one being duplicated) and its size
+  auto printTypeAndSize = [&DL](tda::TransparentType *TT) {
+    tda::TransparentType *Pointed = TT->isPointerTT() ? TT->getPointedType() : TT;
+    if (!Pointed) {
+      errs() << "opaque ptr";
+      return;
+    }
+    Type *LLVMTy = Pointed->getLLVMType();
+    errs() << *LLVMTy;
+    if (LLVMTy->isSized()) {
+      errs() << " (size: " << DL.getTypeAllocSize(LLVMTy) << " bytes)";
+    }
+  };
+
+  std::vector<tda::TransparentType *> Candidates;
+  errs() << "TDA deduced " << TTIter->second.size() << " type(s) for " << *value << "\n";
+  for (const auto &TT : TTIter->second) {
+    printTypeAndSize(TT.get());
+    errs() << "\n";
+    tda::TransparentType *VTyCopy = TT.get();
+    while (VTyCopy && VTyCopy->isPointerTT() && !VTyCopy->isOpaquePtr()) {
       VTyCopy = VTyCopy->getPointedType();
     }
+    if (VTyCopy && !VTyCopy->isOpaquePtr()) {
+      Candidates.push_back(TT.get());
+    }
   }
+  if (Candidates.empty()) {
+    errs() << "Warning! TDA value contains opaque pointer " << *value << "\n";
+    return false;
+  }
+  std::sort(Candidates.begin(), Candidates.end(),
+      [](tda::TransparentType *A, tda::TransparentType *B) { return A->toString() < B->toString(); });
+
+  tda::TransparentType *VTy = Candidates.front();
+  // If the value is an alloca, prefer a type whose pointee has the same size as the allocated
+  // memory, otherwise the temporary copy may be smaller than what the callee writes into it
+  if (auto *AI = dyn_cast<AllocaInst>(value)) {
+    if (std::optional<TypeSize> AllocSize = AI->getAllocationSize(DL)) {
+      for (tda::TransparentType *Candidate : Candidates) {
+        tda::TransparentType *Pointed = Candidate->isPointerTT() ? Candidate->getPointedType() : nullptr;
+        if (Pointed && Pointed->getLLVMType()->isSized() &&
+            DL.getTypeAllocSize(Pointed->getLLVMType()) == *AllocSize) {
+          VTy = Candidate;
+          break;
+        }
+      }
+    }
+  }
+  errs() << "Deduced type chosen: ";
+  printTypeAndSize(VTy);
+  errs() << "\n";
 
   int indirections = 0;
   Value *currentPtr = value;
