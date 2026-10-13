@@ -16,7 +16,7 @@ FAULT_INJECTION_DIR = Path(__file__).resolve().parent
 TESTING_DIR = FAULT_INJECTION_DIR.parent
 ASPIS_ROOT = TESTING_DIR.parent
 ASPIS_SH = ASPIS_ROOT / "aspis.sh"
-DEFAULT_SOURCE = TESTING_DIR / "tests" / "c" / "control_flow" / "loop_exit.c"
+DEFAULT_SOURCE = TESTING_DIR / "tests" / "rust" / "control_flow" / "loop_exit.rs"
 DEFAULT_BUILD_DIR = FAULT_INJECTION_DIR / "build"
 
 DATA_SENTINEL = "ASPIS_FAULT_INJECTION_CAUGHT: DataCorruption_Handler"
@@ -73,6 +73,17 @@ def text_section_address_offset(binary: Path) -> tuple[int, int]:
     raise RuntimeError(f"could not find .text section in {binary}")
 
 
+def symbol_matches(symbol: str, func_name: str) -> bool:
+    if symbol == func_name:
+        return True
+    # A Rust path like "crate::main" matches its legacy-mangled symbol, whose
+    # trailing hash differs between builds (e.g. _ZN5crate4main17h<hash>E).
+    if "::" in func_name:
+        prefix = "_ZN" + "".join(f"{len(p)}{p}" for p in func_name.split("::"))
+        return re.fullmatch(re.escape(prefix) + r"17h[0-9a-f]{16}E", symbol) is not None
+    return False
+
+
 def function_byte_range(
     binary: Path, func_name: str, text_addr: int, text_off: int
 ) -> tuple[int, int, int]:
@@ -81,7 +92,11 @@ def function_byte_range(
     ).stdout
     for line in symbols.splitlines():
         m = _SYMBOL_RE.match(line)
-        if m and m.group("type") == "FUNC" and m.group("name") == func_name:
+        if (
+            m
+            and m.group("type") == "FUNC"
+            and symbol_matches(m.group("name"), func_name)
+        ):
             value = int(m.group("value"), 16)
             size = int(m.group("size"))
             if size == 0:
@@ -239,7 +254,11 @@ def main() -> int:
         default=None,
         help="defaults to testing/config/llvm.toml's llvm_bin",
     )
-    parser.add_argument("--func", default="main", help="function to inject faults into")
+    parser.add_argument(
+        "--func",
+        default="main",
+        help="function to inject faults into: a symbol name, or a Rust path like crate::main",
+    )
     parser.add_argument("--data-technique", default="--eddi")
     parser.add_argument("--cfc-technique", default="--cfcss")
     parser.add_argument("--trials", type=int, default=100)
@@ -247,6 +266,8 @@ def main() -> int:
     parser.add_argument("--timeout", type=float, default=5.0)
     parser.add_argument("--build-dir", type=Path, default=DEFAULT_BUILD_DIR)
     args = parser.parse_args()
+    args.source = args.source.resolve()
+    args.build_dir = args.build_dir.resolve()
 
     for name, value in vars(args).items():
         print(f"  {name}: {value}")

@@ -412,8 +412,9 @@ void EDDI::preprocess(Module &Md) {
   while(!toCheckVariables.empty()){
     std::set<Value *> toAddVariables; // support set to contain new to-be-checked values
     for(Value *V : toCheckVariables) {
-      // Just protect the return value of the call, not the operands
-      if((isa<Instruction>(V) || isa<GEPOperator>(V)) && !isa<CallBase>(V)) {
+      // Just protect the return value of the call, not the operands, unless it is
+      // overflow-checked arithmetic (e.g. from rustc's overflow checks)
+      if((isa<Instruction>(V) || isa<GEPOperator>(V)) && (!isa<CallBase>(V) || isa<WithOverflowInst>(V))) {
         auto Instr = cast<User>(V);
 
         // Check parameters of function
@@ -1764,7 +1765,10 @@ PreservedAnalyses EDDI::run(Module &Md, ModuleAnalysisManager &AM) {
   // Fixing the duplicated constructors
   fixDuplicatedConstructors(Md);
 
-  deducedTypes = tda.run(Md, AM);
+  // Workaround: TDA's fixed point may never be reached in some cases, so we place an upper bound on its iterations
+  constexpr unsigned int TDA_max_iterations = 5;
+  errs() << "Running TDA with " << TDA_max_iterations << " max iterations\n";
+  deducedTypes = tda.run(Md, AM, TDA_max_iterations);
 
   // list of duplicated instructions to remove since they are equal to the original
   std::set<CallBase *> GrayAreaCallsToFix;
@@ -1780,8 +1784,10 @@ PreservedAnalyses EDDI::run(Module &Md, ModuleAnalysisManager &AM) {
     BasicBlock *ErrBB = BasicBlock::Create(Fn->getContext(), "ErrBB", Fn);
 
     LLVM_DEBUG(dbgs() << "function arguments");
-    // save the function arguments and their duplicates
-    for (int i = 0; i < Fn->arg_size(); i++) {
+    // save the function arguments and their duplicates.
+    // The entry point is protected in place, so its arguments are not duplicated
+    bool hasDuplicatedArgs = Fn->getName().ends_with("_dup");
+    for (int i = 0; hasDuplicatedArgs && i < Fn->arg_size(); i++) {
       Value *Arg, *ArgClone;
       if (!AlternateMemMapEnabled) {
         if (i >= Fn->arg_size() / 2) {
@@ -1974,7 +1980,7 @@ PreservedAnalyses EDDI::run(Module &Md, ModuleAnalysisManager &AM) {
       // Create alloca and memcpy only if ptr since if it is a value, we can just pass two times the same value
       if(Arg->getType()->isPointerTy() && !CInstr->isByValArgument(i) && isa<Instruction>(Arg) && !isa<CallInst>(Arg))
       {
-        // If cannot perform TAD, do not duplicate Arg
+        // If cannot perform TDA, do not duplicate Arg
         temporaryArgumentDuplication(Md, Arg, B);
       } else {
         // Otherwise pass two times the same arg
@@ -2057,18 +2063,63 @@ bool EDDI::temporaryArgumentDuplication(Module &Md, llvm::Value *value, IRBuilde
     return false;
   }
 
-  tda::TransparentType *VTy = TTIter->second.begin()->get();
-  // Cannot do argument duplication if the type contains opaque pointers since we cannot find the final value to duplicate
-  {
-    auto VTyCopy = VTy;
-    while(VTyCopy->isPointerTT()) {
-      if (VTyCopy->isOpaquePtr()) {
-        errs() << "Warning! TAD value contains opaque pointer " << *value << "\n";
-        return false;
-      }
+  // Prints the pointed type (the one being duplicated) and its size
+  auto printTypeAndSize = [&DL](tda::TransparentType *TT) {
+    tda::TransparentType *Pointed = TT->isPointerTT() ? TT->getPointedType() : TT;
+    if (!Pointed) {
+      errs() << "opaque ptr";
+      return;
+    }
+    Type *LLVMTy = Pointed->getLLVMType();
+    errs() << *LLVMTy;
+    if (LLVMTy->isSized()) {
+      errs() << " (size: " << DL.getTypeAllocSize(LLVMTy) << " bytes)";
+    }
+  };
+
+  std::vector<tda::TransparentType *> Candidates;
+  errs() << "TDA deduced " << TTIter->second.size() << " type(s) for " << *value << "\n";
+  for (const auto &TT : TTIter->second) {
+    printTypeAndSize(TT.get());
+    errs() << "\n";
+    tda::TransparentType *VTyCopy = TT.get();
+    while (VTyCopy && VTyCopy->isPointerTT() && !VTyCopy->isOpaquePtr()) {
       VTyCopy = VTyCopy->getPointedType();
     }
+    // Cannot do argument duplication if the type contains opaque pointers since we cannot find the final value to duplicate
+    if (VTyCopy && !VTyCopy->isOpaquePtr()) {
+      Candidates.push_back(TT.get());
+    }
   }
+
+  if (Candidates.empty()) {
+    errs() << "Warning! TDA value contains opaque pointer " << *value << "\n";
+    return false;
+  }
+
+  // TDA produces an unordered_set of types, whose iteration order is not deterministic, so we choose
+  // the first one (alphabetically) that fits into the pointed type.
+
+  std::sort(Candidates.begin(), Candidates.end(),
+      [](tda::TransparentType *A, tda::TransparentType *B) { return A->toString() < B->toString(); });
+
+  tda::TransparentType *VTy = Candidates.front();
+  if (auto *AI = dyn_cast<AllocaInst>(value)) {
+    if (std::optional<TypeSize> AllocSize = AI->getAllocationSize(DL)) {
+      for (tda::TransparentType *Candidate : Candidates) {
+        tda::TransparentType *Pointed = Candidate->isPointerTT() ? Candidate->getPointedType() : nullptr;
+        if (Pointed && Pointed->getLLVMType()->isSized() &&
+            DL.getTypeAllocSize(Pointed->getLLVMType()) == *AllocSize) {
+          VTy = Candidate;
+          break;
+        }
+      }
+    }
+  }
+
+  errs() << "Deduced type chosen: ";
+  printTypeAndSize(VTy);
+  errs() << "\n";
 
   int indirections = 0;
   Value *currentPtr = value;

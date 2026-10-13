@@ -87,7 +87,6 @@ source_file = "c/multi_instruction/multi_if_then_else.c"
 test_name = "c_multi_if_then_else_var-decl-sign"
 source_file = "c/declared_signatures/multi_if_then_else.c"
 
-
 [[tests]]
 test_name = "c_phi"
 source_file = "c/multi_instruction/phi.c"
@@ -202,3 +201,19 @@ test_name = "cpp_complex"
 source_file = "cpp/complex/*.cpp"
 add_compiler_flags = "-lm"
 black_list = ["--inter-rasm", "--racfed"]
+
+[[tests]]
+test_name = "rust_loop_exit"
+source_file = "rust/control_flow/loop_exit.rs"
+
+[[tests]]
+test_name = "rust_add"
+source_file = "rust/simple/add.rs"
+
+[[tests]]
+test_name = "rust_mul"
+source_file = "rust/simple/mul.rs"
+
+[[tests]]
+test_name = "rust_fact"
+source_file = "rust/simple/fact.rs"

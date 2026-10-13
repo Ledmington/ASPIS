@@ -69,7 +69,10 @@ def cleanup_out_ll(build_dir):
 # Compile without ASPIS to get expected output
 def compile_without_aspis(source_file, output_file, llvm_bin, build_dir):
   """Compile a file without ASPIS."""
-  command = f"{llvm_bin}/clang++ {source_file} -o {build_dir}/{output_file}.out --verbose"
+  if source_file.endswith(".rs"):
+    command = f"rustc -C panic=abort {source_file} -o {build_dir}/{output_file}.out"
+  else:
+    command = f"{llvm_bin}/clang++ {source_file} -o {build_dir}/{output_file}.out --verbose"
   print(command)
   stdout, stderr, exit_code = run_command(command)
   if exit_code != 0:

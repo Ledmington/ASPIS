@@ -11,7 +11,7 @@ jobs:
   compile-ASPIS:
     runs-on: ubuntu-latest
     container:
-      image: docker.io/ledmington/aspis-deps:llvm21
+      image: docker.io/ledmington/aspis-deps:llvm-rust1.93
 
     steps:
       - name: Checking out ASPIS
@@ -49,7 +49,10 @@ jobs:
         run: |
           source .venv/bin/activate
           pip install -r fault_injection/requirements.txt
-          python3 fault_injection/inject.py
+          python3 fault_injection/inject.py --source tests/rust/control_flow/loop_exit.rs --func loop_exit::main --trials 100 --build-dir fault_injection/build/loop_exit
+          python3 fault_injection/inject.py --source tests/rust/simple/add.rs --func add::main --trials 100 --build-dir fault_injection/build/add
+          python3 fault_injection/inject.py --source tests/rust/simple/mul.rs --func mul::main --trials 100 --build-dir fault_injection/build/mul
+          python3 fault_injection/inject.py --source tests/rust/simple/fact.rs --func fact::main --trials 100 --build-dir fault_injection/build/fact
 
       - name: Upload comparison counter artifact
         if: always()
