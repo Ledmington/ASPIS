@@ -363,15 +363,13 @@ run_aspis() {
         fi
     done
 
-    ## Rust programs that use std (i.e. not #![no_std]) reference symbols from Rust's standard
-    ## library, so the final link must pull in the toolchain's libstd. It is linked dynamically,
-    ## since a static link would need the allocator shim that only a rustc-driven link generates.
-    ## --as-needed keeps #![no_std] programs, which never reference it, free of the dependency.
+    ## Rust programs reference symbols from Rust's standard library, so the final link must pull in
+    ## the toolchain's libstd.
     rust_link_flags=""
     if [[ "$rust_input" == true ]]; then
         rust_lib_dir="$($RUSTC --print target-libdir)"
         rust_std_lib="$(basename "$(ls "$rust_lib_dir"/libstd-*.so | head -n 1)" .so)"
-        rust_link_flags="-L$rust_lib_dir -Wl,-rpath,$rust_lib_dir -Wl,--push-state,--as-needed -l${rust_std_lib#lib} -Wl,--pop-state"
+        rust_link_flags="-L$rust_lib_dir -Wl,-rpath,$rust_lib_dir -l${rust_std_lib#lib}"
     fi
 
     ## LINK & PREPROCESS
@@ -379,8 +377,7 @@ run_aspis() {
 
     success_msg "Emitted and linked IR."
 
-    ## Translate any Rust link_section markers ("aspis_<annotation>") into regular ASPIS
-    ## annotations. A no-op on modules with none, so it is always safe to run.
+    ## Explicitly use the Rust annotation bridge before anything else.
     exe $OPT -load-pass-plugin=$DIR/build/passes/libRUSTBRIDGE.so --passes="aspis-rust-annotation-bridge" $build_dir/out.ll -o $build_dir/out.ll
     success_msg "Translated Rust annotations."
 
