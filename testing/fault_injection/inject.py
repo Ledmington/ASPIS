@@ -267,6 +267,7 @@ def main() -> int:
     parser.add_argument("--build-dir", type=Path, default=DEFAULT_BUILD_DIR)
     args = parser.parse_args()
     args.source = args.source.resolve()
+    args.build_dir = args.build_dir.resolve()
 
     for name, value in vars(args).items():
         print(f"  {name}: {value}")
