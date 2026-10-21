@@ -37,7 +37,8 @@
         "mechatroner.rainbow-csv",
         "timonwong.shellcheck",
         "RReverser.llvm",
-        "tamasfe.even-better-toml"
+        "tamasfe.even-better-toml",
+        "xaver.clang-format"
       ]
     }
   },
