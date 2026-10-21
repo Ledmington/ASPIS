@@ -153,23 +153,24 @@ SetVector<GlobalObject *> findRustStartupGlue(Module &Md) {
 class RustAnnotationBridge : public PassInfoMixin<RustAnnotationBridge> {
 public:
   PreservedAnalyses run(Module &Md, ModuleAnalysisManager &) {
+    outs() << "run()\n";
+
     std::vector<std::pair<GlobalObject *, std::string>> ToAnnotate;
 
-    auto Collect = [&ToAnnotate](GlobalObject &GO) {
-      for (std::string &Annotation : extractASPISAnnotations(GO)) {
-        ToAnnotate.emplace_back(&GO, std::move(Annotation));
-      }
-    };
-
     for (GlobalVariable &GV : Md.globals()) {
-      Collect(GV);
+      for (std::string &Annotation : extractASPISAnnotations(GV)) {
+        ToAnnotate.emplace_back(&GV, std::move(Annotation));
+      }
     }
 
     for (Function &Fn : Md) {
-      Collect(Fn);
+      for (std::string &Annotation : extractASPISAnnotations(Fn)) {
+        ToAnnotate.emplace_back(&Fn, std::move(Annotation));
+      }
     }
 
     for (GlobalObject *GO : findRustStartupGlue(Md)) {
+      outs() << "Found Rust startup glue: " << GO->getName() << "\n";
       if (auto *Fn = dyn_cast<Function>(GO)) {
         ToAnnotate.emplace_back(Fn, "exclude");
       }
@@ -181,15 +182,16 @@ public:
 
     addAnnotations(Md, ToAnnotate);
 
+    outs() << "run() finished\n";
     return PreservedAnalyses::none();
   }
 
   static bool isRequired() { return true; }
 
 private:
-  static void
-  addAnnotations(Module &Md,
-                 ArrayRef<std::pair<GlobalObject *, std::string>> ToAnnotate) {
+  static void addAnnotations(
+      Module &Md,
+      const std::vector<std::pair<GlobalObject *, std::string>> &ToAnnotate) {
     LLVMContext &Ctx = Md.getContext();
     auto *PtrTy = PointerType::getUnqual(Ctx);
     auto *EntryTy = StructType::get(Ctx, {PtrTy, PtrTy});
