@@ -1,3 +1,4 @@
+use aspis_rust_annotations::aspis;
 use std::io::Write;
 
 #[unsafe(no_mangle)]
@@ -13,9 +14,14 @@ pub extern "C" fn SigMismatch_Handler() {
 }
 
 // compute n! recursively
-#[unsafe(link_section = "aspis_to_harden")]
+#[aspis(to_harden)]
+#[unsafe(link_section = ".text.hot")]
 fn fact(n: u32) -> u64 {
-    if n <= 1 { 1 } else { n as u64 * fact(n - 1) }
+    if n <= 1 {
+        1
+    } else {
+        n as u64 * fact(n - 1)
+    }
 }
 
 fn main() {

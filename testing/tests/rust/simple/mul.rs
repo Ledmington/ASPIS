@@ -1,3 +1,4 @@
+use aspis_rust_annotations::aspis;
 use std::io::Write;
 
 #[unsafe(no_mangle)]
@@ -12,7 +13,8 @@ pub extern "C" fn SigMismatch_Handler() {
     std::io::stdout().flush().unwrap();
 }
 
-#[unsafe(link_section = "aspis_to_harden")]
+#[aspis(to_harden)]
+#[unsafe(link_section = ".text.hot")]
 fn multiply(a: i32, b: i32) -> i32 {
     a * b
 }
