@@ -94,20 +94,32 @@ fn parse_aspis_annotation(attr: proc_macro2::TokenStream) -> syn::Result<Ident> 
     Ok(annotation)
 }
 
-/// Removes the `#[unsafe(link_section = "...")]` (or edition 2021 `#[link_section = "..."]`)
-/// attribute from `attrs`, returning its section name.
+/// Removes the `#[unsafe(link_section = "...")]` attribute from `attrs`, returning its section
+/// name. Only edition 2024 sources are supported, so the unsafe-less `#[link_section = "..."]`
+/// form is rejected.
 fn take_link_section(attrs: &mut Vec<Attribute>) -> syn::Result<Option<LitStr>> {
     let mut section = None;
     let mut error: Option<syn::Error> = None;
 
     attrs.retain(|attr| {
         let name_value = match &attr.meta {
-            Meta::NameValue(nv) if nv.path.is_ident("link_section") => nv.clone(),
             Meta::List(list) if list.path.is_ident("unsafe") => {
                 match list.parse_args::<MetaNameValue>() {
                     Ok(nv) if nv.path.is_ident("link_section") => nv,
                     _ => return true,
                 }
+            }
+            meta if meta.path().is_ident("link_section") => {
+                let e = syn::Error::new_spanned(
+                    attr,
+                    "link_section must be written as `#[unsafe(link_section = \"...\")]`, \
+                     only edition 2024 sources are supported",
+                );
+                match &mut error {
+                    Some(error) => error.combine(e),
+                    None => error = Some(e),
+                }
+                return false;
             }
             _ => return true,
         };
