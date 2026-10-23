@@ -351,13 +351,29 @@ run_aspis() {
 
     title_msg "Front-end and pre-processing"
 
+    ## Rust sources may use the #[aspis(...)] macro from the rust-annotations crate. It only emits
+    ## the annotations when compiled with `--cfg aspis`, so a plain rustc build ignores them.
+    rust_annotations_lib="$DIR/rust-annotations/target/release/libaspis_rust_annotations.so"
+    if [[ "$rust_input" == true && ! -f "$rust_annotations_lib" ]]; then
+        error_msg "Rust annotations crate not found at $rust_annotations_lib. Build it with 'cargo build --release' in $DIR/rust-annotations."
+    fi
+
     ## FRONTEND
     for input_file in $input_files; do
         # Extract the filename without extension
         filename=$(basename "$input_file" | sed 's/\.[^.]*$//')
         # Compile the file to LLVM IR (.ll) and save it in the build directory
         if [[ "$input_file" == *.rs ]]; then
-            exe $RUSTC --crate-type=bin --emit=llvm-ir -C opt-level=0 -C panic=abort "$input_file" -o "$build_dir/$filename.ll"
+            exe $RUSTC \
+                --crate-type=bin \
+                --edition 2024 \
+                --cfg aspis \
+                --check-cfg 'cfg(aspis)' \
+                --extern aspis_rust_annotations="$rust_annotations_lib" \
+                -C opt-level=0 \
+                -C panic=abort \
+                --emit=llvm-ir \
+                "$input_file" -o "$build_dir/$filename.ll"
         else
             exe $CLANG "$input_file" $clang_options -S -emit-llvm -O0 -Xclang -disable-O0-optnone -o "$build_dir/$filename.ll"
         fi
