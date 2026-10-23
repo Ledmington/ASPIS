@@ -53,15 +53,16 @@ public:
       }
     }
 
+    // If no ASPIS annotations were found, do not touch anything else
+    if (ToAnnotate.empty()) {
+      return PreservedAnalyses::all();
+    }
+
     for (GlobalObject *GO : findRustStartupGlue(Md)) {
       outs() << "Found Rust startup glue: " << GO->getName() << "\n";
       if (auto *Fn = dyn_cast<Function>(GO)) {
         ToAnnotate.emplace_back(Fn, "exclude");
       }
-    }
-
-    if (ToAnnotate.empty()) {
-      return PreservedAnalyses::all();
     }
 
     addAnnotations(Md, ToAnnotate);
