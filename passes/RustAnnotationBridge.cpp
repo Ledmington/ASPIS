@@ -4,10 +4,10 @@
  *
  * Converts any global symbol marked with `#[unsafe(link_section =
  * "aspis_<annotation>")]` to the corresponding ASPIS
- * `__attribute__((annotate("<annotation>")))`. Multiple annotations can be
- * given as a comma-separated list, e.g. `link_section =
- * "aspis_to_harden,aspis_exclude"`, which may also contain a regular section
- * (e.g. `".data,aspis_to_harden"`) that is kept on the symbol.
+ * `__attribute__((annotate("<annotation>")))`. The section may be a
+ * comma-separated list that also contains a regular section (e.g.
+ * `".data,aspis_to_harden"`), which is kept on the symbol. ASPIS annotations
+ * are mutually exclusive, so a symbol with more than one is rejected.
  *
  * ************************************************************************************************
  */
@@ -25,6 +25,7 @@
 #include "llvm/Pass.h"
 #include "llvm/Passes/PassBuilder.h"
 #include "llvm/Passes/PassPlugin.h"
+#include "llvm/Support/ErrorHandling.h"
 #include <optional>
 #include <string>
 #include <utility>
@@ -42,14 +43,14 @@ public:
     std::vector<std::pair<GlobalObject *, std::string>> ToAnnotate;
 
     for (GlobalVariable &GV : Md.globals()) {
-      for (std::string &Annotation : extractASPISAnnotations(GV)) {
-        ToAnnotate.emplace_back(&GV, std::move(Annotation));
+      if (std::optional<StringRef> Annotation = extractASPISAnnotation(GV)) {
+        ToAnnotate.emplace_back(&GV, Annotation->str());
       }
     }
 
     for (Function &Fn : Md) {
-      for (std::string &Annotation : extractASPISAnnotations(Fn)) {
-        ToAnnotate.emplace_back(&Fn, std::move(Annotation));
+      if (std::optional<StringRef> Annotation = extractASPISAnnotation(Fn)) {
+        ToAnnotate.emplace_back(&Fn, Annotation->str());
       }
     }
 
@@ -89,32 +90,37 @@ private:
   }
 
   // The section may hold a comma-separated list containing both ASPIS markers
-  // and regular sections, e.g. ".data, aspis_to_harden". The ASPIS markers are
-  // removed and returned as annotations; the remaining entries are kept as the
-  // symbol's section.
-  std::vector<std::string> extractASPISAnnotations(GlobalObject &GO) {
+  // and regular sections, e.g. ".data, aspis_to_harden". The ASPIS marker is
+  // removed and returned as the annotation; the remaining entries are kept as
+  // the symbol's section. At most one ASPIS marker is allowed per symbol.
+  std::optional<StringRef> extractASPISAnnotation(GlobalObject &GO) {
     if (!GO.hasSection()) {
-      return {};
+      return std::nullopt;
     }
 
     SmallVector<StringRef, 4> Entries;
     GO.getSection().split(Entries, ',');
 
-    std::vector<std::string> Annotations;
+    std::optional<StringRef> Found;
     SmallVector<StringRef, 4> Remaining;
     for (StringRef Entry : Entries) {
       Entry = Entry.trim();
       if (std::optional<StringRef> Annotation = getASPISAnnotation(Entry)) {
-        Annotations.emplace_back(Annotation.value());
+        if (Found) {
+          report_fatal_error("Symbol '" + GO.getName() +
+                             "' has multiple ASPIS annotations in section '" +
+                             GO.getSection() + "', only one is allowed");
+        }
+        Found = Annotation;
       } else {
         Remaining.push_back(Entry);
       }
     }
 
-    if (!Annotations.empty()) {
+    if (Found) {
       GO.setSection(join(Remaining, ","));
     }
-    return Annotations;
+    return Found;
   }
 
   // Whether every use of V, looking through constant expressions and
