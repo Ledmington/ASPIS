@@ -211,9 +211,13 @@ test_name = "rust_add"
 source_file = "rust/simple/add.rs"
 
 [[tests]]
-test_name = "rust_mul"
-source_file = "rust/simple/mul.rs"
-
-[[tests]]
 test_name = "rust_fact"
 source_file = "rust/simple/fact.rs"
+
+[[tests]]
+test_name = "rust_func"
+source_file = "rust/simple/func.rs"
+
+[[tests]]
+test_name = "rust_mul"
+source_file = "rust/simple/mul.rs"
