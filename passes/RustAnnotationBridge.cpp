@@ -14,6 +14,7 @@
 #include "llvm/ADT/SetVector.h"
 #include "llvm/ADT/SmallVector.h"
 #include "llvm/ADT/StringExtras.h"
+#include "llvm/Demangle/Demangle.h"
 #include "llvm/IR/Constants.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/GlobalObject.h"
@@ -59,10 +60,27 @@ public:
       return PreservedAnalyses::all();
     }
 
+    SetVector<GlobalObject *> Annotated;
+    for (auto &[GO, Annotation] : ToAnnotate) {
+      Annotated.insert(GO);
+    }
+
     for (GlobalObject *GO : findRustStartupGlue(Md)) {
       outs() << "Found Rust startup glue: " << GO->getName() << "\n";
-      if (auto *Fn = dyn_cast<Function>(GO)) {
+      if (auto *Fn = dyn_cast<Function>(GO); Fn && Annotated.insert(Fn)) {
         ToAnnotate.emplace_back(Fn, "exclude");
+      }
+    }
+
+    // Generic code from Rust's standard library (e.g.
+    // `core::fmt::Arguments::new`) is monomorphized into the crate. Exclude it,
+    // as if it were an external library like the C++ standard library.
+    for (Function &Fn : Md) {
+      if (!Fn.isDeclaration() && isRustStdLibFunction(Fn) &&
+          Annotated.insert(&Fn)) {
+        outs() << "Found Rust standard library function: " << Fn.getName()
+               << "\n";
+        ToAnnotate.emplace_back(&Fn, "exclude");
       }
     }
 
@@ -121,6 +139,19 @@ private:
       GO.setSection(join(Remaining, ","));
     }
     return Found;
+  }
+
+  // Whether Fn's demangled path starts with one of the standard library
+  // crates. Trait impls (`<T as core::...>::...`) are not matched, since T may
+  // be a user type.
+  bool isRustStdLibFunction(const Function &Fn) {
+    std::string Name = demangle(Fn.getName().str());
+    for (StringRef Crate : {"core::", "alloc::", "std::"}) {
+      if (StringRef(Name).starts_with(Crate)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   // Whether every use of V, looking through constant expressions and
