@@ -1101,8 +1101,23 @@ void EDDI::fixFuncValsPassedByReference(
         Value *Copy = Duplicate;
         if(Original->getType()->isPointerTy() && Copy->getType()->isPointerTy()) {
           Type *OriginalType = Original->getType();
+
+          // Constants are never duplicated, so a pointer to read-only memory
+          // has `orig` == `dup` at runtime. In that case the copy is a no-op
+          // and writing would fault, so redirect the store to a scratch slot.
+          IRBuilder<> EntryB(&*I.getFunction()->getEntryBlock().getFirstInsertionPt());
+          Instruction *Scratch = EntryB.CreateAlloca(OriginalType);
+          Instruction *SameCmp = cast<Instruction>(B.CreateICmpEQ(Original, Copy));
+          Instruction *Dest = cast<Instruction>(B.CreateSelect(SameCmp, Scratch, Copy));
+
           Instruction *TmpLoad = B.CreateLoad(OriginalType, Original);
-          Instruction *TmpStore = B.CreateStore(TmpLoad, Copy);
+          Instruction *TmpStore = B.CreateStore(TmpLoad, Dest);
+          DuplicatedInstructionMap.insert(
+              std::pair<Instruction *, Instruction *>(Scratch, Scratch));
+          DuplicatedInstructionMap.insert(
+              std::pair<Instruction *, Instruction *>(SameCmp, SameCmp));
+          DuplicatedInstructionMap.insert(
+              std::pair<Instruction *, Instruction *>(Dest, Dest));
           DuplicatedInstructionMap.insert(
               std::pair<Instruction *, Instruction *>(TmpLoad, TmpLoad));
           DuplicatedInstructionMap.insert(
