@@ -224,6 +224,11 @@ test_name = "rust_func"
 source_file = "rust/simple/func.rs"
 
 [[tests]]
+test_name = "rust_heap"
+source_file = "rust/simple/heap.rs"
+black_list = ["--inter-rasm"]
+
+[[tests]]
 test_name = "rust_mul"
 source_file = "rust/simple/mul.rs"
 
