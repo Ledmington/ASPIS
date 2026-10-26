@@ -226,3 +226,7 @@ source_file = "rust/simple/mul.rs"
 test_name = "rust_basicmath"
 source_file = "rust/mibench/basicmath.rs"
 add_compiler_flags = "-lm"
+
+[[tests]]
+test_name = "rust_crc32_mibench"
+source_file = "rust/mibench/crc32_mibench.rs"
