@@ -220,6 +220,11 @@ test_name = "rust_fact"
 source_file = "rust/simple/fact.rs"
 
 [[tests]]
+test_name = "rust_file_handler"
+source_file = "rust/simple/file_handler.rs"
+black_list = ["--racfed"]
+
+[[tests]]
 test_name = "rust_func"
 source_file = "rust/simple/func.rs"
 
