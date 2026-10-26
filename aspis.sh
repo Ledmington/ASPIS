@@ -187,21 +187,21 @@ EOF
                         if [[ ${#opt} -eq 9 ]]; then
                             parse_state=4;
                         else
-                            exclude_file=`echo "$opt" | cut -b 9`;
+                            exclude_file=$(echo "$opt" | cut -b 9);
                         fi;
                         ;;
                     --asmfiles*)
                         if [[ ${#opt} -eq 10 ]]; then
                             parse_state=5;
                         else
-                            asm_file=`echo "$opt" | cut -b 10`;
+                            asm_file=$(echo "$opt" | cut -b 10);
                         fi;
                         ;;
                     --build-dir*)
                         if [[ ${#opt} -eq 11 ]]; then
                             parse_state=6;
                         else
-                            build_dir=`echo "$opt" | cut -b 10`;
+                            build_dir=$(echo "$opt" | cut -b 10);
                         fi;
                         ;;
                     --eddi)
@@ -347,7 +347,10 @@ run_aspis() {
     fi
 
     exe mkdir -p $build_dir
-    exe rm -f $build_dir/*.ll
+
+    ## Intermediate .ll files emitted by the frontend, linked into out.ll
+    ll_files=()
+    excluded_ll_files=()
 
     title_msg "Front-end and pre-processing"
 
@@ -377,6 +380,7 @@ run_aspis() {
         else
             exe $CLANG "$input_file" $clang_options -S -emit-llvm -O0 -Xclang -disable-O0-optnone -o "$build_dir/$filename.ll"
         fi
+        ll_files+=("$build_dir/$filename.ll")
     done
 
     ## Rust programs reference symbols from Rust's standard library, so the final link must pull in
@@ -389,7 +393,7 @@ run_aspis() {
     fi
 
     ## LINK & PREPROCESS
-    exe $LLVM_LINK $build_dir/*.ll -o $build_dir/out.ll
+    exe $LLVM_LINK "${ll_files[@]}" -o $build_dir/out.ll
 
     success_msg "Emitted and linked IR."
 
@@ -461,15 +465,16 @@ run_aspis() {
 
         ## Frontend & linking
         exe mv $build_dir/out.ll $build_dir/out.ll.bak
-        exe rm $build_dir/*.ll
+        exe rm -f "${ll_files[@]}"
         exe mv $build_dir/out.ll.bak $build_dir/out.ll
         for input_file in $excluded_files; do
             # Extract the filename without extension
             filename=$(basename "$input_file" | sed 's/\.[^.]*$//')
             # Compile the file to LLVM IR (.ll) and save it in the build directory
             exe $CLANG "$input_file" $clang_options -S -emit-llvm -Xclang -disable-O0-optnone -o "$build_dir/$filename.ll"
+            excluded_ll_files+=("$build_dir/$filename.ll")
         done
-        exe $LLVM_LINK $build_dir/*.ll -o $build_dir/out.ll
+        exe $LLVM_LINK $build_dir/out.ll "${excluded_ll_files[@]}" -o $build_dir/out.ll
     fi;
     success_msg "Linked excluded files to the compilation."
 
@@ -518,7 +523,7 @@ run_aspis() {
 
     #Cleanup
     if [[ $cleanup == true ]]; then
-        rm -f $build_dir/*.ll
+        rm -f "${ll_files[@]}" "${excluded_ll_files[@]}" $build_dir/out.ll
         success_msg "Cleaned cached files."
     fi
 
