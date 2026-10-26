@@ -11,6 +11,7 @@
 #include "llvm/Demangle/Demangle.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/IR/Attributes.h"
+#include "llvm/IR/DataLayout.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instructions.h"
@@ -35,6 +36,7 @@
 #include <llvm/Support/Errc.h>
 #include <llvm/Support/ModRef.h>
 #include <map>
+#include <optional>
 #include <queue>
 #include <unordered_set>
 
@@ -1080,8 +1082,29 @@ void EDDI::compareValues(std::vector<Value *> *CmpInstructions, Value &V1, Value
 }
 
 
-// Given an instruction, loads and stores the pointers passed to the
-// instruction. This is useful in the case I is a CallBase, since the function
+// Returns the number of bytes from Ptr to the end of the alloca or global it
+// points into, or std::nullopt if the object or the offset are not known
+// statically.
+static std::optional<uint64_t> getPointeeSize(Value *Ptr, const DataLayout &DL) {
+  APInt Offset(DL.getIndexTypeSizeInBits(Ptr->getType()), 0);
+  Value *Base = Ptr->stripAndAccumulateConstantOffsets(DL, Offset, /*AllowNonInbounds=*/true);
+
+  std::optional<TypeSize> ObjSize;
+  if (auto *AI = dyn_cast<AllocaInst>(Base)) {
+    ObjSize = AI->getAllocationSize(DL);
+  } else if (auto *GV = dyn_cast<GlobalVariable>(Base)) {
+    ObjSize = DL.getTypeAllocSize(GV->getValueType());
+  }
+
+  if (!ObjSize || ObjSize->isScalable() || Offset.isNegative() ||
+      Offset.uge(ObjSize->getFixedValue())) {
+    return std::nullopt;
+  }
+  return ObjSize->getFixedValue() - Offset.getZExtValue();
+}
+
+// Given an instruction, copies the memory pointed by the pointers passed to the
+// instruction into their duplicates. This is useful in the case I is a CallBase, since the function
 // called might not be in the compilation unit, and the function called may
 // modify the content of the pointer passed as argument. This function has the
 // objective of synchronize pointers after some non-duplicated instruction
@@ -1100,18 +1123,24 @@ void EDDI::fixFuncValsPassedByReference(
         Value *Original = Operand;
         Value *Copy = Duplicate;
         if(Original->getType()->isPointerTy() && Copy->getType()->isPointerTy()) {
-          Type *OriginalType = Original->getType();
+          // Copy the whole pointee: copying only a pointer-sized value would
+          // overflow smaller objects and leave larger ones half-synchronized.
+          // If the size is not known statically, do not synchronize at all.
+          std::optional<uint64_t> Size =
+              getPointeeSize(Original, I.getModule()->getDataLayout());
+          if (!Size) {
+            continue;
+          }
 
           // Constants are never duplicated, so a pointer to read-only memory
           // has `orig` == `dup` at runtime. In that case the copy is a no-op
-          // and writing would fault, so redirect the store to a scratch slot.
+          // and writing would fault, so redirect the copy to a scratch slot.
           IRBuilder<> EntryB(&*I.getFunction()->getEntryBlock().getFirstInsertionPt());
-          Instruction *Scratch = EntryB.CreateAlloca(OriginalType);
+          Instruction *Scratch = EntryB.CreateAlloca(ArrayType::get(B.getInt8Ty(), *Size));
           Instruction *SameCmp = cast<Instruction>(B.CreateICmpEQ(Original, Copy));
           Instruction *Dest = cast<Instruction>(B.CreateSelect(SameCmp, Scratch, Copy));
 
-          Instruction *TmpLoad = B.CreateLoad(OriginalType, Original);
-          Instruction *TmpStore = B.CreateStore(TmpLoad, Dest);
+          Instruction *TmpCopy = B.CreateMemCpy(Dest, Align(1), Original, Align(1), *Size);
           DuplicatedInstructionMap.insert(
               std::pair<Instruction *, Instruction *>(Scratch, Scratch));
           DuplicatedInstructionMap.insert(
@@ -1119,9 +1148,7 @@ void EDDI::fixFuncValsPassedByReference(
           DuplicatedInstructionMap.insert(
               std::pair<Instruction *, Instruction *>(Dest, Dest));
           DuplicatedInstructionMap.insert(
-              std::pair<Instruction *, Instruction *>(TmpLoad, TmpLoad));
-          DuplicatedInstructionMap.insert(
-              std::pair<Instruction *, Instruction *>(TmpStore, TmpStore));
+              std::pair<Instruction *, Instruction *>(TmpCopy, TmpCopy));
         }
       }
     }
