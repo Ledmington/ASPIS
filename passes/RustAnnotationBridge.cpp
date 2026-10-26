@@ -142,16 +142,101 @@ private:
   }
 
   // Whether Fn's demangled path starts with one of the standard library
-  // crates. Trait impls (`<T as core::...>::...`) are not matched, since T may
-  // be a user type.
+  // crates.
+  //
+  // A trait impl (`<Type as Trait>::method`) is matched when the trait is from
+  // the standard library and the type is either a standard library type or a
+  // primitive one, e.g. `<alloc::boxed::Box<T> as core::ops::drop::Drop>`.
+  // Impls for user types (`<mycrate::MyType as core::fmt::Display>`) are not.
   bool isRustStdLibFunction(const Function &Fn) {
-    std::string Name = demangle(Fn.getName().str());
+    std::string Name = demangleRust(Fn.getName());
+    if (isStdLibPath(Name)) {
+      return true;
+    }
+
+    std::optional<std::pair<StringRef, StringRef>> Impl = splitTraitImpl(Name);
+    if (!Impl) {
+      return false;
+    }
+    auto [Type, Trait] = *Impl;
+    return isStdLibPath(Trait) && (isStdLibPath(Type) || isPrimitiveType(Type));
+  }
+
+  bool isStdLibPath(StringRef Path) {
     for (StringRef Crate : {"core::", "alloc::", "std::"}) {
-      if (StringRef(Name).starts_with(Crate)) {
+      if (Path.starts_with(Crate)) {
         return true;
       }
     }
     return false;
+  }
+
+  // Whether Type is a primitive type, a reference or pointer to one, or a
+  // slice, array or tuple: everything that does not start with a path.
+  bool isPrimitiveType(StringRef Type) {
+    for (StringRef Prefix : {"&mut ", "&", "*const ", "*mut "}) {
+      if (Type.consume_front(Prefix)) {
+        break;
+      }
+    }
+    return !Type.take_until([](char C) { return C == '<'; }).contains("::");
+  }
+
+  // Demangles a Rust symbol, also decoding the escapes left by the legacy
+  // mangling scheme (e.g. `_$LT$alloc..boxed..Box$LT$T$GT$` becomes
+  // `<alloc::boxed::Box<T>`).
+  //
+  // The alternative to decoding the escapes "by hand" is compiling with
+  // `-C symbol-mangling-version=v0`, which uses a different simpler scheme.
+  std::string demangleRust(StringRef mangledName) {
+    std::string name = demangle(mangledName.str());
+    if (name.find('$') == std::string::npos) {
+      return name;
+    }
+
+    if (StringRef(name).starts_with("_$")) {
+      name.erase(0, 1);
+    }
+    static const std::pair<StringRef, StringRef> Escapes[] = {
+        {"$LT$", "<"},  {"$GT$", ">"},  {"$C$", ","},   {"$RF$", "&"},
+        {"$BP$", "*"},  {"$LP$", "("},  {"$RP$", ")"},  {"$SP$", "@"},
+        {"$u20$", " "}, {"$u27$", "'"}, {"$u3b$", ";"}, {"$u5b$", "["},
+        {"$u5d$", "]"}, {"$u7b$", "{"}, {"$u7d$", "}"}, {"$u7e$", "~"},
+        {"..", "::"}};
+    for (auto [From, To] : Escapes) {
+      for (size_t Pos = name.find(From); Pos != std::string::npos;
+           Pos = name.find(From, Pos + To.size())) {
+        name.replace(Pos, From.size(), To.str());
+      }
+    }
+    return name;
+  }
+
+  // Splits a demangled `<Type as Trait>::method` name into Type and Trait.
+  std::optional<std::pair<StringRef, StringRef>>
+  splitTraitImpl(StringRef name) {
+    if (!name.starts_with("<")) {
+      return std::nullopt;
+    }
+
+    int depth = 0;
+    std::optional<size_t> As;
+    for (size_t i = 0; i < name.size(); i++) {
+      if (name[i] == '<') {
+        depth++;
+      } else if (name[i] == '>' && (i == 0 || name[i - 1] != '-')) {
+        depth--;
+        if (depth == 0) {
+          if (!As) {
+            return std::nullopt;
+          }
+          return std::make_pair(name.slice(1, *As), name.slice(*As + 4, i));
+        }
+      } else if (depth == 1 && !As && name.substr(i).starts_with(" as ")) {
+        As = i;
+      }
+    }
+    return std::nullopt;
   }
 
   // Whether every use of V, looking through constant expressions and
