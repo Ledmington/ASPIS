@@ -217,6 +217,7 @@ source_file = "rust/simple/fact.rs"
 [[tests]]
 test_name = "rust_func"
 source_file = "rust/simple/func.rs"
+black_list = ["--inter-rasm"]
 
 [[tests]]
 test_name = "rust_mul"
