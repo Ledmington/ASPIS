@@ -230,3 +230,7 @@ add_compiler_flags = "-lm"
 [[tests]]
 test_name = "rust_crc32_mibench"
 source_file = "rust/mibench/crc32_mibench.rs"
+
+[[tests]]
+test_name = "rust_dijkstra_small_mibench"
+source_file = "rust/mibench/dijkstra_small_mibench.rs"
