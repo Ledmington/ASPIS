@@ -19,9 +19,9 @@ static mut G: i32 = 0;
 fn f_non_dup() {
     unsafe {
         G += 1;
-        let copy = G;
-        println!("Function f_non_dup called (G incremented to {})", copy);
     }
+    let copy = unsafe { G };
+    println!("Function f_non_dup called (G incremented to {})", copy);
 }
 
 #[aspis(to_harden)]
@@ -29,16 +29,14 @@ fn f_non_dup() {
 fn f() {
     unsafe {
         G += 1;
-        let copy = G;
-        println!("Function f called (G incremented to {})", copy);
     }
+    let copy = unsafe { G };
+    println!("Function f called (G incremented to {})", copy);
 }
 
 fn main() {
     f(); // Called once
     f_non_dup();
-    unsafe {
-        let copy = G;
-        println!("Final value of G: {}", copy);
-    }
+    let copy = unsafe { G };
+    println!("Final value of G: {}", copy);
 }
