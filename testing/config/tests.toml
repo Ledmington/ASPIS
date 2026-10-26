@@ -223,6 +223,10 @@ test_name = "rust_mul"
 source_file = "rust/simple/mul.rs"
 
 [[tests]]
+test_name = "cpp_ptr"
+source_file = "cpp/simple/ptr.cpp"
+
+[[tests]]
 test_name = "rust_basicmath"
 source_file = "rust/mibench/basicmath.rs"
 add_compiler_flags = "-lm"
