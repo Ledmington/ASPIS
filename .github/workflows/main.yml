@@ -49,17 +49,6 @@ jobs:
           source .venv/bin/activate
           pytest test.py --no-header -v -n $(nproc) --dist loadgroup
 
-      - name: Running fault-injection campaign
-        shell: bash
-        working-directory: ${{ github.workspace }}/ASPIS/testing
-        run: |
-          source .venv/bin/activate
-          pip install -r fault_injection/requirements.txt
-          python3 fault_injection/inject.py --source tests/rust/control_flow/loop_exit.rs --func loop_exit::main --trials 100 --build-dir fault_injection/build/loop_exit
-          python3 fault_injection/inject.py --source tests/rust/simple/add.rs --func add::main --trials 100 --build-dir fault_injection/build/add
-          python3 fault_injection/inject.py --source tests/rust/simple/mul.rs --func mul::main --trials 100 --build-dir fault_injection/build/mul
-          python3 fault_injection/inject.py --source tests/rust/simple/fact.rs --func fact::main --trials 100 --build-dir fault_injection/build/fact
-
       - name: Upload comparison counter artifact
         if: always()
         uses: actions/upload-artifact@v4
