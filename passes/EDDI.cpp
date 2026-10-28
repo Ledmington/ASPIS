@@ -1103,6 +1103,33 @@ static std::optional<uint64_t> getPointeeSize(Value *Ptr, const DataLayout &DL) 
   return ObjSize->getFixedValue() - Offset.getZExtValue();
 }
 
+// Returns the size of the type that TDA deduced for the object pointed by Ptr,
+// or std::nullopt if TDA could not deduce a unique, sized pointee type.
+static std::optional<uint64_t> getDeducedPointeeSize(Value *Ptr, const DataLayout &DL,
+                                                     const tda::TypeDeductionAnalysis::Result &DeducedTypes) {
+  auto It = DeducedTypes.transparentTypes.find(Ptr);
+  if (It == DeducedTypes.transparentTypes.end() || It->second.size() != 1) {
+    return std::nullopt;
+  }
+
+  const tda::TransparentType *PtrTy = It->second.begin()->get();
+  if (!PtrTy || !PtrTy->isPointerTT() || PtrTy->isOpaquePtr()) {
+    return std::nullopt;
+  }
+
+  const tda::TransparentType *PointeeTy = PtrTy->getPointedType();
+  if (!PointeeTy || PointeeTy->isOpaquePtr() || !PointeeTy->getLLVMType() ||
+      !PointeeTy->getLLVMType()->isSized()) {
+    return std::nullopt;
+  }
+
+  TypeSize Size = DL.getTypeStoreSize(PointeeTy->getLLVMType());
+  if (Size.isScalable() || Size.getFixedValue() == 0) {
+    return std::nullopt;
+  }
+  return Size.getFixedValue();
+}
+
 // Given an instruction, copies the memory pointed by the pointers passed to the
 // instruction into their duplicates. This is useful in the case I is a CallBase, since the function
 // called might not be in the compilation unit, and the function called may
@@ -1125,9 +1152,14 @@ void EDDI::fixFuncValsPassedByReference(
         if(Original->getType()->isPointerTy() && Copy->getType()->isPointerTy()) {
           // Copy the whole pointee: copying only a pointer-sized value would
           // overflow smaller objects and leave larger ones half-synchronized.
-          // If the size is not known statically, do not synchronize at all.
-          std::optional<uint64_t> Size =
-              getPointeeSize(Original, I.getModule()->getDataLayout());
+          // If the object is not known statically (e.g. heap memory), fall back
+          // to the pointee type deduced by TDA. If neither is known, do not
+          // synchronize at all.
+          const DataLayout &DL = I.getModule()->getDataLayout();
+          std::optional<uint64_t> Size = getPointeeSize(Original, DL);
+          if (!Size) {
+            Size = getDeducedPointeeSize(Original, DL, deducedTypes);
+          }
           if (!Size) {
             continue;
           }
