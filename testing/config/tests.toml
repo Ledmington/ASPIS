@@ -258,6 +258,10 @@ test_name = "rust_template"
 source_file = "rust/simple/template.rs"
 
 [[tests]]
+test_name = "rust_volatile_memory_order"
+source_file = "rust/simple/volatile_memory_order.rs"
+
+[[tests]]
 test_name = "rust_basicmath"
 source_file = "rust/mibench/basicmath.rs"
 add_compiler_flags = "-lm"
