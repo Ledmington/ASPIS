@@ -203,6 +203,10 @@ add_compiler_flags = "-lm"
 black_list = ["--inter-rasm", "--racfed"]
 
 [[tests]]
+test_name = "rust_function_pointer"
+source_file = "rust/control_flow/function_pointer.rs"
+
+[[tests]]
 test_name = "rust_loop_exit"
 source_file = "rust/control_flow/loop_exit.rs"
 
