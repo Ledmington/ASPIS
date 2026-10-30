@@ -170,6 +170,7 @@ class RASM : public PassInfoMixin<RASM> {
         void splitBBsAtCalls(Module &Md);
         CallBase *isCallBB (BasicBlock &BB);
         void initializeEntryBlocksMap(Module &Md);
+        void resetSignaturesAtExternalCalls(Module &Md, GlobalVariable &RuntimeSig, GlobalVariable &RetSig);
         Value *getCondition(Instruction &I);
         void createCFGVerificationBB (  BasicBlock &BB, 
                                     std::map<BasicBlock*, int> &RandomNumberBBs, 

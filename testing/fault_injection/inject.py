@@ -1,285 +1,198 @@
 #!/usr/bin/env python3
 
 import argparse
-import random
-import re
-import shutil
-import subprocess
-import sys
-import tomllib
-from collections import Counter
 from pathlib import Path
+import shutil
+import tempfile
+import subprocess
+import random
+import os
+import sys
+from collections import Counter
 
-import capstone
-
-FAULT_INJECTION_DIR = Path(__file__).resolve().parent
-TESTING_DIR = FAULT_INJECTION_DIR.parent
-ASPIS_ROOT = TESTING_DIR.parent
-ASPIS_SH = ASPIS_ROOT / "aspis.sh"
-DEFAULT_SOURCE = TESTING_DIR / "tests" / "c" / "control_flow" / "loop_exit.c"
-DEFAULT_BUILD_DIR = FAULT_INJECTION_DIR / "build"
+from elftools.elf.elffile import ELFFile
 
 DATA_SENTINEL = "ASPIS_FAULT_INJECTION_CAUGHT: DataCorruption_Handler"
 SIG_SENTINEL = "ASPIS_FAULT_INJECTION_CAUGHT: SigMismatch_Handler"
 
 
-def default_llvm_bin() -> str:
-    with open(TESTING_DIR / "config" / "llvm.toml", "rb") as f:
-        return tomllib.load(f)["llvm_bin"]
+def flip_random_bit(file_path, section_name):
+    with open(file_path, "r+b") as f:
+        elf = ELFFile(f)
+        section = elf.get_section_by_name(section_name)
+
+        if section is None:
+            raise ValueError(f"Section not found: {section_name}")
+
+        offset = section["sh_offset"]
+        size = section["sh_size"]
+
+        if size == 0:
+            raise ValueError(f"Section is empty: {section_name}")
+
+        # Choose a random byte and bit
+        byte_offset = offset + random.randrange(size)
+        bit_index = random.randrange(8)
+
+        # Read the byte
+        f.seek(byte_offset)
+        original_byte = f.read(1)[0]
+
+        # Flip exactly one bit
+        modified_byte = original_byte ^ (1 << bit_index)
+
+        # Write the modified byte
+        f.seek(byte_offset)
+        f.write(bytes([modified_byte]))
+
+        return byte_offset, bit_index
 
 
-def compile_with_aspis(
-    source: Path, out_name: str, options: list[str], llvm_bin: str, build_dir: Path
-) -> Path:
-    build_dir.mkdir(parents=True, exist_ok=True)
-    out_path = build_dir / f"{out_name}.out"
-    command = [
-        str(ASPIS_SH),
-        "--llvm-bin",
-        llvm_bin,
-        *options,
-        str(source),
-        "-o",
-        f"{out_name}.out",
-        "--build-dir",
-        str(build_dir),
-    ]
-    result = subprocess.run(command, cwd=ASPIS_ROOT, text=True, capture_output=True)
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"ASPIS compilation failed:\n{result.stdout}\n{result.stderr}"
-        )
-    if not out_path.exists():
-        raise RuntimeError(f"ASPIS reported success but {out_path} was not produced")
-    return out_path
+def classify(output, exit_code, timed_out):
+    # The handlers exit with a non-zero code, so check them before crashes.
+    if DATA_SENTINEL in output:
+        return "data_corruption"
+    if SIG_SENTINEL in output:
+        return "sig_mismatch"
+    if timed_out or exit_code != 0:
+        return "crashed"
+    return "undetected"
 
 
-_SECTION_RE = re.compile(
-    r"^\s*\[\s*\d+\]\s+(?P<name>\S+)\s+\S+\s+(?P<addr>[0-9a-fA-F]+)\s+(?P<off>[0-9a-fA-F]+)\s+(?P<size>[0-9a-fA-F]+)\s"
-)
-_SYMBOL_RE = re.compile(
-    r"^\s*\d+:\s+(?P<value>[0-9a-fA-F]+)\s+(?P<size>\d+)\s+(?P<type>\S+)\s+\S+\s+\S+\s+\S+\s+(?P<name>\S+)"
-)
+def run_fault_injection_campaign(file, sections, seed, num_attempts, timeout):
 
+    print(f"File          : {file}")
+    print(f"Sections      : {sections}")
+    print(f"Seed          : {seed}")
+    print(f"Num. Attempts : {num_attempts}")
+    print(f"Timeout       : {timeout}s")
 
-def text_section_address_offset(binary: Path) -> tuple[int, int]:
-    sections = subprocess.run(
-        ["readelf", "-W", "-S", str(binary)], text=True, capture_output=True, check=True
-    ).stdout
-    for line in sections.splitlines():
-        m = _SECTION_RE.match(line)
-        if m and m.group("name") == ".text":
-            return int(m.group("addr"), 16), int(m.group("off"), 16)
-    raise RuntimeError(f"could not find .text section in {binary}")
+    random.seed(seed)
+    counts = Counter()
 
+    for _ in range(num_attempts):
 
-def function_byte_range(
-    binary: Path, func_name: str, text_addr: int, text_off: int
-) -> tuple[int, int, int]:
-    symbols = subprocess.run(
-        ["readelf", "-W", "-s", str(binary)], text=True, capture_output=True, check=True
-    ).stdout
-    for line in symbols.splitlines():
-        m = _SYMBOL_RE.match(line)
-        if m and m.group("type") == "FUNC" and m.group("name") == func_name:
-            value = int(m.group("value"), 16)
-            size = int(m.group("size"))
-            if size == 0:
-                raise RuntimeError(
-                    f"symbol {func_name!r} has size 0, cannot pick an injection offset"
-                )
-            file_offset = text_off + (value - text_addr)
-            return file_offset, size, value
+        with tempfile.NamedTemporaryFile(
+            prefix="aspis_fault_injection_",
+            delete=False,
+            delete_on_close=False,
+        ) as tmp:
+            temp_path = Path(tmp.name)
 
-    raise RuntimeError(
-        f"could not find FUNC symbol {func_name!r} in {binary} (is it stripped?)"
-    )
-
-
-def operand_biased_offsets(
-    binary: Path, file_offset: int, size: int, addr: int
-) -> list[int]:
-    code = binary.read_bytes()[file_offset : file_offset + size]
-    md = capstone.Cs(capstone.CS_ARCH_X86, capstone.CS_MODE_64)
-    md.detail = True
-
-    candidates: list[int] = []
-    for insn in md.disasm(code, addr):
-        insn_file_offset = file_offset + (insn.address - addr)
-        enc = insn.encoding
-        if enc.imm_size:
-            candidates.extend(
-                range(
-                    insn_file_offset + enc.imm_offset,
-                    insn_file_offset + enc.imm_offset + enc.imm_size,
-                )
-            )
-        if enc.disp_size:
-            candidates.extend(
-                range(
-                    insn_file_offset + enc.disp_offset,
-                    insn_file_offset + enc.disp_offset + enc.disp_size,
-                )
-            )
-
-    return candidates
-
-
-def flip_random_bit_at(
-    data: bytearray, candidates: list[int], rng: random.Random
-) -> tuple[int, int]:
-    byte_index = rng.choice(candidates)
-    bit_index = rng.randrange(8)
-    data[byte_index] ^= 1 << bit_index
-    return byte_index, bit_index
-
-
-def classify(stdout: str, returncode: int, golden_stdout: str, timed_out: bool) -> str:
-    caught_data = DATA_SENTINEL in stdout
-    caught_sig = SIG_SENTINEL in stdout
-    if caught_data and caught_sig:
-        return "caught_both"
-    if caught_data:
-        return "caught_data"
-    if caught_sig:
-        return "caught_sig"
-    if timed_out:
-        return "hang_undetected"
-    if returncode < 0:
-        return "crashed_undetected"
-    if stdout == golden_stdout:
-        return "silent_no_effect"
-    return "silent_wrong_output"
-
-
-def run_campaign(
-    binary: Path, func_name: str, trials: int, seed: int, timeout: float, work_dir: Path
-) -> Counter:
-    text_addr, text_off = text_section_address_offset(binary)
-    offset, size, addr = function_byte_range(binary, func_name, text_addr, text_off)
-
-    try:
-        candidates = operand_biased_offsets(binary, offset, size, addr)
-    except ModuleNotFoundError:
-        raise RuntimeError(
-            "capstone is required for operand-biased fault injection: "
-            "pip install -r testing/fault_injection/requirements.txt"
-        )
-    if not candidates:
-        raise RuntimeError(
-            f"{func_name!r} has no immediate/displacement operand bytes to inject into"
-        )
-
-    print(
-        f"  injecting into {func_name!r}: file offset 0x{offset:x}, size {size} bytes, "
-        f"{len(candidates)} operand-biased candidate bytes"
-    )
-
-    original = bytearray(binary.read_bytes())
-    golden = subprocess.run(
-        [str(binary)], text=True, errors="replace", capture_output=True, timeout=timeout
-    )
-    golden_stdout = golden.stdout
-
-    rng = random.Random(seed)
-    work_dir.mkdir(parents=True, exist_ok=True)
-    patched_path = work_dir / f"{binary.stem}.patched"
-
-    counts: Counter = Counter()
-    for _ in range(trials):
-        patched = bytearray(original)
-        flip_random_bit_at(patched, candidates, rng)
-        patched_path.write_bytes(patched)
-        patched_path.chmod(0o755)
-
-        timed_out = False
         try:
-            result = subprocess.run(
-                [str(patched_path)],
-                text=True,
-                errors="replace",
-                capture_output=True,
-                timeout=timeout,
-            )
-            stdout, returncode = result.stdout, result.returncode
-        except subprocess.TimeoutExpired as e:
-            timed_out = True
-            stdout, returncode = (e.stdout or ""), -1
+            shutil.copy2(file, temp_path)
+            flip_random_bit(temp_path, random.choice(sections))
 
-        outcome = classify(stdout, returncode, golden_stdout, timed_out)
-        counts[outcome] += 1
+            timed_out = False
+            try:
+                result = subprocess.run(
+                    [str(temp_path)],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    errors="replace",
+                    timeout=timeout,
+                )
+                output = result.stdout
+                exit_code = result.returncode
+            except subprocess.TimeoutExpired as e:
+                timed_out = True
+                output = e.stdout or ""
+                if isinstance(output, bytes):
+                    output = output.decode(errors="replace")
+                exit_code = None
 
-    patched_path.unlink(missing_ok=True)
+            counts[classify(output, exit_code, timed_out)] += 1
+
+        finally:
+            temp_path.unlink(missing_ok=True)
+
     return counts
 
 
-def print_summary(label: str, counts: Counter, trials: int) -> None:
-    print(f"\n{label} ({trials} trials):")
-    for category in [
-        "caught_data",
-        "caught_sig",
-        "caught_both",
-        "crashed_undetected",
-        "hang_undetected",
-        "silent_wrong_output",
-        "silent_no_effect",
-    ]:
-        n = counts.get(category, 0)
-        if n:
-            print(f"  {category:<22} {n:4d}  ({100 * n / trials:5.1f}%)")
+def print_summary(counts, num_attempts):
+    print()
+    for outcome in ["data_corruption", "sig_mismatch", "crashed", "undetected"]:
+        n = counts[outcome]
+        print(f"{outcome:<16}: {n:4d} ({100 * n / num_attempts:5.1f}%)")
 
 
-def main() -> int:
+def main():
     parser = argparse.ArgumentParser(
-        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+        prog="fault_injection",
+        description="Runs a fault injection campaign against a given executable file",
     )
-    parser.add_argument("--source", type=Path, default=DEFAULT_SOURCE)
     parser.add_argument(
-        "--llvm-bin",
-        default=None,
-        help="defaults to testing/config/llvm.toml's llvm_bin",
+        "-f",
+        "--file",
+        type=Path,
+        required=True,
+        help="the executable file to inject faults into",
     )
-    parser.add_argument("--func", default="main", help="function to inject faults into")
-    parser.add_argument("--data-technique", default="--eddi")
-    parser.add_argument("--cfc-technique", default="--cfcss")
-    parser.add_argument("--trials", type=int, default=100)
-    parser.add_argument("--seed", type=int, default=0)
-    parser.add_argument("--timeout", type=float, default=5.0)
-    parser.add_argument("--build-dir", type=Path, default=DEFAULT_BUILD_DIR)
+    parser.add_argument(
+        "--sections",
+        nargs="+",
+        default=[".data", ".rodata"],
+        help="names of sections to modify",
+    )
+    parser.add_argument(
+        "-s", "--seed", type=int, default=42, help="the seed for random fault injection"
+    )
+    parser.add_argument(
+        "-n",
+        "--num-attempts",
+        type=int,
+        default=100,
+        help="number of random faults to inject",
+    )
+    parser.add_argument(
+        "-t",
+        "--timeout",
+        type=float,
+        default=5.0,
+        help="seconds after which a run of the executable is considered hung",
+    )
+    parser.add_argument(
+        "--check-detection",
+        action="store_true",
+        help="exit with failure if no DataCorruption or SigMismatch is detected",
+    )
+
     args = parser.parse_args()
 
-    for name, value in vars(args).items():
-        print(f"  {name}: {value}")
+    if not args.file.is_file():
+        parser.error(f"{args.file} does not exist or is not a regular file")
 
-    llvm_bin = args.llvm_bin or default_llvm_bin()
-    if shutil.which("clang", path=llvm_bin) is None:
-        print(
-            f"warning: clang not found under --llvm-bin {llvm_bin!r}",
-            file=sys.stderr,
-        )
+    if not os.access(args.file, os.X_OK):
+        parser.error(f"{args.file} is not executable")
 
-    print(f"Compiling hardened build ({args.data_technique} {args.cfc_technique})...")
-    hardened = compile_with_aspis(
-        args.source,
-        "hardened",
-        [args.data_technique, args.cfc_technique],
-        llvm_bin,
-        args.build_dir,
-    )
-    hardened_counts = run_campaign(
-        hardened,
-        args.func,
-        args.trials,
-        args.seed,
-        args.timeout,
-        args.build_dir / "hardened_trials",
-    )
-    print_summary(
-        f"hardened [{args.data_technique} {args.cfc_technique}]",
-        hardened_counts,
-        args.trials,
-    )
+    with args.file.open("rb") as f:
+        elf = ELFFile(f)
 
+        file_sections = {sec.name: sec for sec in elf.iter_sections()}
+
+        for section in args.sections:
+            if section not in file_sections:
+                parser.error(
+                    f"Executable {args.file} does not contain a section named {section}"
+                )
+            # NOBITS sections (e.g. .bss) occupy no bytes in the file.
+            if file_sections[section]["sh_type"] == "SHT_NOBITS":
+                parser.error(f"Section {section} has no bytes in the file")
+
+    if args.num_attempts <= 0:
+        parser.error("Number of attempts must be >0.")
+
+    counts = run_fault_injection_campaign(
+        args.file, args.sections, args.seed, args.num_attempts, args.timeout
+    )
+    print_summary(counts, args.num_attempts)
+
+    if args.check_detection and not (
+        counts["data_corruption"] or counts["sig_mismatch"]
+    ):
+        print("No fault was detected", file=sys.stderr)
+        return 1
     return 0
 
 

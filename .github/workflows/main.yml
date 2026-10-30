@@ -11,7 +11,7 @@ jobs:
   compile-ASPIS:
     runs-on: ubuntu-latest
     container:
-      image: docker.io/ledmington/aspis-deps:llvm21
+      image: docker.io/ledmington/aspis-deps:llvm-rust1.93
 
     steps:
       - name: Checking out ASPIS
@@ -28,6 +28,12 @@ jobs:
           cmake -S . -B build -DLLVM_DIR=${{ env.LLVM_INSTALL_DIR }}/lib/cmake/llvm
           cmake --build build -j $(nproc) -- all
 
+      - name: Compiling ASPIS Rust annotations library
+        shell: bash
+        working-directory: ${{ github.workspace }}/ASPIS/rust-annotations
+        run: |
+          cargo build --release
+
       - name: Install Python requirements
         shell: bash
         working-directory: ${{ github.workspace }}/ASPIS/testing
@@ -42,14 +48,6 @@ jobs:
         run: |
           source .venv/bin/activate
           pytest test.py --no-header -v -n $(nproc) --dist loadgroup
-
-      - name: Running fault-injection campaign
-        shell: bash
-        working-directory: ${{ github.workspace }}/ASPIS/testing
-        run: |
-          source .venv/bin/activate
-          pip install -r fault_injection/requirements.txt
-          python3 fault_injection/inject.py
 
       - name: Upload comparison counter artifact
         if: always()

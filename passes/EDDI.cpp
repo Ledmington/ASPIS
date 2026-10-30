@@ -11,6 +11,7 @@
 #include "llvm/Demangle/Demangle.h"
 #include "llvm/ADT/Statistic.h"
 #include "llvm/IR/Attributes.h"
+#include "llvm/IR/DataLayout.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/IRBuilder.h"
 #include "llvm/IR/Instructions.h"
@@ -35,6 +36,7 @@
 #include <llvm/Support/Errc.h>
 #include <llvm/Support/ModRef.h>
 #include <map>
+#include <optional>
 #include <queue>
 #include <unordered_set>
 
@@ -412,8 +414,9 @@ void EDDI::preprocess(Module &Md) {
   while(!toCheckVariables.empty()){
     std::set<Value *> toAddVariables; // support set to contain new to-be-checked values
     for(Value *V : toCheckVariables) {
-      // Just protect the return value of the call, not the operands
-      if((isa<Instruction>(V) || isa<GEPOperator>(V)) && !isa<CallBase>(V)) {
+      // Just protect the return value of the call, not the operands, unless it is
+      // overflow-checked arithmetic (e.g. from rustc's overflow checks)
+      if((isa<Instruction>(V) || isa<GEPOperator>(V)) && (!isa<CallBase>(V) || isa<WithOverflowInst>(V))) {
         auto Instr = cast<User>(V);
 
         // Check parameters of function
@@ -1079,8 +1082,56 @@ void EDDI::compareValues(std::vector<Value *> *CmpInstructions, Value &V1, Value
 }
 
 
-// Given an instruction, loads and stores the pointers passed to the
-// instruction. This is useful in the case I is a CallBase, since the function
+// Returns the number of bytes from Ptr to the end of the alloca or global it
+// points into, or std::nullopt if the object or the offset are not known
+// statically.
+static std::optional<uint64_t> getPointeeSize(Value *Ptr, const DataLayout &DL) {
+  APInt Offset(DL.getIndexTypeSizeInBits(Ptr->getType()), 0);
+  Value *Base = Ptr->stripAndAccumulateConstantOffsets(DL, Offset, /*AllowNonInbounds=*/true);
+
+  std::optional<TypeSize> ObjSize;
+  if (auto *AI = dyn_cast<AllocaInst>(Base)) {
+    ObjSize = AI->getAllocationSize(DL);
+  } else if (auto *GV = dyn_cast<GlobalVariable>(Base)) {
+    ObjSize = DL.getTypeAllocSize(GV->getValueType());
+  }
+
+  if (!ObjSize || ObjSize->isScalable() || Offset.isNegative() ||
+      Offset.uge(ObjSize->getFixedValue())) {
+    return std::nullopt;
+  }
+  return ObjSize->getFixedValue() - Offset.getZExtValue();
+}
+
+// Returns the size of the type that TDA deduced for the object pointed by Ptr,
+// or std::nullopt if TDA could not deduce a unique, sized pointee type.
+static std::optional<uint64_t> getDeducedPointeeSize(Value *Ptr, const DataLayout &DL,
+                                                     const tda::TypeDeductionAnalysis::Result &DeducedTypes) {
+  auto It = DeducedTypes.transparentTypes.find(Ptr);
+  if (It == DeducedTypes.transparentTypes.end() || It->second.size() != 1) {
+    return std::nullopt;
+  }
+
+  const tda::TransparentType *PtrTy = It->second.begin()->get();
+  if (!PtrTy || !PtrTy->isPointerTT() || PtrTy->isOpaquePtr()) {
+    return std::nullopt;
+  }
+
+  const tda::TransparentType *PointeeTy = PtrTy->getPointedType();
+  if (!PointeeTy || PointeeTy->isOpaquePtr() || !PointeeTy->getLLVMType() ||
+      !PointeeTy->getLLVMType()->isSized()) {
+    return std::nullopt;
+  }
+
+  TypeSize Size = DL.getTypeStoreSize(PointeeTy->getLLVMType());
+  if (Size.isScalable() || Size.getFixedValue() == 0) {
+    return std::nullopt;
+  }
+  return Size.getFixedValue();
+}
+
+// Given an instruction, copies the memory pointed by the pointers passed to the
+// instruction into their duplicates. This is useful in the case I is a CallBase, since the function
 // called might not be in the compilation unit, and the function called may
 // modify the content of the pointer passed as argument. This function has the
 // objective of synchronize pointers after some non-duplicated instruction
@@ -1099,13 +1150,37 @@ void EDDI::fixFuncValsPassedByReference(
         Value *Original = Operand;
         Value *Copy = Duplicate;
         if(Original->getType()->isPointerTy() && Copy->getType()->isPointerTy()) {
-          Type *OriginalType = Original->getType();
-          Instruction *TmpLoad = B.CreateLoad(OriginalType, Original);
-          Instruction *TmpStore = B.CreateStore(TmpLoad, Copy);
+          // Copy the whole pointee: copying only a pointer-sized value would
+          // overflow smaller objects and leave larger ones half-synchronized.
+          // If the object is not known statically (e.g. heap memory), fall back
+          // to the pointee type deduced by TDA. If neither is known, do not
+          // synchronize at all.
+          const DataLayout &DL = I.getModule()->getDataLayout();
+          std::optional<uint64_t> Size = getPointeeSize(Original, DL);
+          if (!Size) {
+            Size = getDeducedPointeeSize(Original, DL, deducedTypes);
+          }
+          if (!Size) {
+            continue;
+          }
+
+          // Constants are never duplicated, so a pointer to read-only memory
+          // has `orig` == `dup` at runtime. In that case the copy is a no-op
+          // and writing would fault, so redirect the copy to a scratch slot.
+          IRBuilder<> EntryB(&*I.getFunction()->getEntryBlock().getFirstInsertionPt());
+          Instruction *Scratch = EntryB.CreateAlloca(ArrayType::get(B.getInt8Ty(), *Size));
+          Instruction *SameCmp = cast<Instruction>(B.CreateICmpEQ(Original, Copy));
+          Instruction *Dest = cast<Instruction>(B.CreateSelect(SameCmp, Scratch, Copy));
+
+          Instruction *TmpCopy = B.CreateMemCpy(Dest, Align(1), Original, Align(1), *Size);
           DuplicatedInstructionMap.insert(
-              std::pair<Instruction *, Instruction *>(TmpLoad, TmpLoad));
+              std::pair<Instruction *, Instruction *>(Scratch, Scratch));
           DuplicatedInstructionMap.insert(
-              std::pair<Instruction *, Instruction *>(TmpStore, TmpStore));
+              std::pair<Instruction *, Instruction *>(SameCmp, SameCmp));
+          DuplicatedInstructionMap.insert(
+              std::pair<Instruction *, Instruction *>(Dest, Dest));
+          DuplicatedInstructionMap.insert(
+              std::pair<Instruction *, Instruction *>(TmpCopy, TmpCopy));
         }
       }
     }
@@ -1764,7 +1839,10 @@ PreservedAnalyses EDDI::run(Module &Md, ModuleAnalysisManager &AM) {
   // Fixing the duplicated constructors
   fixDuplicatedConstructors(Md);
 
-  deducedTypes = tda.run(Md, AM);
+  // Workaround: TDA's fixed point may never be reached in some cases, so we place an upper bound on its iterations
+  constexpr unsigned int TDA_max_iterations = 5;
+  errs() << "Running TDA with " << TDA_max_iterations << " max iterations\n";
+  deducedTypes = tda.run(Md, AM, TDA_max_iterations);
 
   // list of duplicated instructions to remove since they are equal to the original
   std::set<CallBase *> GrayAreaCallsToFix;
@@ -1780,8 +1858,10 @@ PreservedAnalyses EDDI::run(Module &Md, ModuleAnalysisManager &AM) {
     BasicBlock *ErrBB = BasicBlock::Create(Fn->getContext(), "ErrBB", Fn);
 
     LLVM_DEBUG(dbgs() << "function arguments");
-    // save the function arguments and their duplicates
-    for (int i = 0; i < Fn->arg_size(); i++) {
+    // save the function arguments and their duplicates.
+    // The entry point is protected in place, so its arguments are not duplicated
+    bool hasDuplicatedArgs = Fn->getName().ends_with("_dup");
+    for (int i = 0; hasDuplicatedArgs && i < Fn->arg_size(); i++) {
       Value *Arg, *ArgClone;
       if (!AlternateMemMapEnabled) {
         if (i >= Fn->arg_size() / 2) {
@@ -1974,7 +2054,7 @@ PreservedAnalyses EDDI::run(Module &Md, ModuleAnalysisManager &AM) {
       // Create alloca and memcpy only if ptr since if it is a value, we can just pass two times the same value
       if(Arg->getType()->isPointerTy() && !CInstr->isByValArgument(i) && isa<Instruction>(Arg) && !isa<CallInst>(Arg))
       {
-        // If cannot perform TAD, do not duplicate Arg
+        // If cannot perform TDA, do not duplicate Arg
         temporaryArgumentDuplication(Md, Arg, B);
       } else {
         // Otherwise pass two times the same arg
@@ -2057,18 +2137,63 @@ bool EDDI::temporaryArgumentDuplication(Module &Md, llvm::Value *value, IRBuilde
     return false;
   }
 
-  tda::TransparentType *VTy = TTIter->second.begin()->get();
-  // Cannot do argument duplication if the type contains opaque pointers since we cannot find the final value to duplicate
-  {
-    auto VTyCopy = VTy;
-    while(VTyCopy->isPointerTT()) {
-      if (VTyCopy->isOpaquePtr()) {
-        errs() << "Warning! TAD value contains opaque pointer " << *value << "\n";
-        return false;
-      }
+  // Prints the pointed type (the one being duplicated) and its size
+  auto printTypeAndSize = [&DL](tda::TransparentType *TT) {
+    tda::TransparentType *Pointed = TT->isPointerTT() ? TT->getPointedType() : TT;
+    if (!Pointed) {
+      errs() << "opaque ptr";
+      return;
+    }
+    Type *LLVMTy = Pointed->getLLVMType();
+    errs() << *LLVMTy;
+    if (LLVMTy->isSized()) {
+      errs() << " (size: " << DL.getTypeAllocSize(LLVMTy) << " bytes)";
+    }
+  };
+
+  std::vector<tda::TransparentType *> Candidates;
+  errs() << "TDA deduced " << TTIter->second.size() << " type(s) for " << *value << "\n";
+  for (const auto &TT : TTIter->second) {
+    printTypeAndSize(TT.get());
+    errs() << "\n";
+    tda::TransparentType *VTyCopy = TT.get();
+    while (VTyCopy && VTyCopy->isPointerTT() && !VTyCopy->isOpaquePtr()) {
       VTyCopy = VTyCopy->getPointedType();
     }
+    // Cannot do argument duplication if the type contains opaque pointers since we cannot find the final value to duplicate
+    if (VTyCopy && !VTyCopy->isOpaquePtr()) {
+      Candidates.push_back(TT.get());
+    }
   }
+
+  if (Candidates.empty()) {
+    errs() << "Warning! TDA value contains opaque pointer " << *value << "\n";
+    return false;
+  }
+
+  // TDA produces an unordered_set of types, whose iteration order is not deterministic, so we choose
+  // the first one (alphabetically) that fits into the pointed type.
+
+  std::sort(Candidates.begin(), Candidates.end(),
+      [](tda::TransparentType *A, tda::TransparentType *B) { return A->toString() < B->toString(); });
+
+  tda::TransparentType *VTy = Candidates.front();
+  if (auto *AI = dyn_cast<AllocaInst>(value)) {
+    if (std::optional<TypeSize> AllocSize = AI->getAllocationSize(DL)) {
+      for (tda::TransparentType *Candidate : Candidates) {
+        tda::TransparentType *Pointed = Candidate->isPointerTT() ? Candidate->getPointedType() : nullptr;
+        if (Pointed && Pointed->getLLVMType()->isSized() &&
+            DL.getTypeAllocSize(Pointed->getLLVMType()) == *AllocSize) {
+          VTy = Candidate;
+          break;
+        }
+      }
+    }
+  }
+
+  errs() << "Deduced type chosen: ";
+  printTypeAndSize(VTy);
+  errs() << "\n";
 
   int indirections = 0;
   Value *currentPtr = value;
