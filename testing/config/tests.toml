@@ -250,6 +250,10 @@ test_name = "rust_ptr"
 source_file = "rust/simple/ptr.rs"
 
 [[tests]]
+test_name = "rust_stl_containers_advanced"
+source_file = "rust/simple/stl_containers_advanced.rs"
+
+[[tests]]
 test_name = "rust_basicmath"
 source_file = "rust/mibench/basicmath.rs"
 add_compiler_flags = "-lm"
