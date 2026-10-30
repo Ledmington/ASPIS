@@ -238,6 +238,10 @@ test_name = "rust_inline_constexpr"
 source_file = "rust/simple/inline_constexpr.rs"
 
 [[tests]]
+test_name = "rust_lambda_captures"
+source_file = "rust/simple/lambda_captures.rs"
+
+[[tests]]
 test_name = "rust_mul"
 source_file = "rust/simple/mul.rs"
 
