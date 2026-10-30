@@ -234,6 +234,10 @@ source_file = "rust/simple/heap.rs"
 black_list = ["--inter-rasm"]
 
 [[tests]]
+test_name = "rust_inline_constexpr"
+source_file = "rust/simple/inline_constexpr.rs"
+
+[[tests]]
 test_name = "rust_mul"
 source_file = "rust/simple/mul.rs"
 
