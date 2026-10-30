@@ -207,6 +207,10 @@ test_name = "rust_loop_exit"
 source_file = "rust/control_flow/loop_exit.rs"
 
 [[tests]]
+test_name = "rust_nested_branch"
+source_file = "rust/control_flow/nested_branch.rs"
+
+[[tests]]
 test_name = "rust_add"
 source_file = "rust/simple/add.rs"
 
