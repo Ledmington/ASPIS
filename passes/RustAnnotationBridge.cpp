@@ -159,7 +159,20 @@ private:
       return false;
     }
     auto [Type, Trait] = *Impl;
+    if (isPrimitiveType(Type) && isOperatorTrait(Trait)) {
+      return false;
+    }
     return isStdLibPath(Trait) && (isStdLibPath(Type) || isPrimitiveType(Type));
+  }
+
+  // Whether Trait is one of the arithmetic or bitwise operator traits, e.g.
+  // `core::ops::arith::AddAssign`. Their impls for primitive types are the
+  // built-in operators, which in C/C++ are plain instructions rather than
+  // library calls, so they must be hardened like user code: excluding them
+  // would make e.g. `x += 1` update only the original copy of `x`.
+  bool isOperatorTrait(StringRef Trait) {
+    return Trait.starts_with("core::ops::arith::") ||
+           Trait.starts_with("core::ops::bit::");
   }
 
   bool isStdLibPath(StringRef Path) {
