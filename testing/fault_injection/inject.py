@@ -2,122 +2,47 @@
 
 import argparse
 from pathlib import Path
-import shutil
-import tempfile
-import subprocess
-import random
 import os
 import sys
-from collections import Counter
+import shutil
+import subprocess
+import shlex
+from collections.abc import Sequence
 
-from elftools.elf.elffile import ELFFile
-
-DATA_SENTINEL = "ASPIS_FAULT_INJECTION_CAUGHT: DataCorruption_Handler"
-SIG_SENTINEL = "ASPIS_FAULT_INJECTION_CAUGHT: SigMismatch_Handler"
-
-
-def flip_random_bit(file_path, section_name):
-    with open(file_path, "r+b") as f:
-        elf = ELFFile(f)
-        section = elf.get_section_by_name(section_name)
-
-        if section is None:
-            raise ValueError(f"Section not found: {section_name}")
-
-        offset = section["sh_offset"]
-        size = section["sh_size"]
-
-        if size == 0:
-            raise ValueError(f"Section is empty: {section_name}")
-
-        # Choose a random byte and bit
-        byte_offset = offset + random.randrange(size)
-        bit_index = random.randrange(8)
-
-        # Read the byte
-        f.seek(byte_offset)
-        original_byte = f.read(1)[0]
-
-        # Flip exactly one bit
-        modified_byte = original_byte ^ (1 << bit_index)
-
-        # Write the modified byte
-        f.seek(byte_offset)
-        f.write(bytes([modified_byte]))
-
-        return byte_offset, bit_index
+# lldb exit codes set by the breakpoint commands on the handlers
+DATA_EXIT_CODE = 10
+SIG_EXIT_CODE = 11
 
 
-def classify(output, exit_code, timed_out):
-    # The handlers exit with a non-zero code, so check them before crashes.
-    if DATA_SENTINEL in output:
-        return "data_corruption"
-    if SIG_SENTINEL in output:
-        return "sig_mismatch"
-    if timed_out or exit_code != 0:
-        return "crashed"
-    return "undetected"
+def run_command(
+    command: Sequence[str], timeout: float = 5.0, check: bool = False
+) -> subprocess.CompletedProcess[str]:
+    print(shlex.join(command))
+    return subprocess.run(
+        command,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        errors="replace",
+        timeout=timeout,
+        check=check,
+    )
 
 
-def run_fault_injection_campaign(file, sections, seed, num_attempts, timeout):
-
-    print(f"File          : {file}")
-    print(f"Sections      : {sections}")
-    print(f"Seed          : {seed}")
-    print(f"Num. Attempts : {num_attempts}")
-    print(f"Timeout       : {timeout}s")
-
-    random.seed(seed)
-    counts = Counter()
-
-    for _ in range(num_attempts):
-
-        with tempfile.NamedTemporaryFile(
-            prefix="aspis_fault_injection_",
-            delete=False,
-            delete_on_close=False,
-        ) as tmp:
-            temp_path = Path(tmp.name)
-
-        try:
-            shutil.copy2(file, temp_path)
-            flip_random_bit(temp_path, random.choice(sections))
-
-            timed_out = False
-            try:
-                result = subprocess.run(
-                    [str(temp_path)],
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    errors="replace",
-                    timeout=timeout,
-                )
-                output = result.stdout
-                exit_code = result.returncode
-            except subprocess.TimeoutExpired as e:
-                timed_out = True
-                output = e.stdout or ""
-                if isinstance(output, bytes):
-                    output = output.decode(errors="replace")
-                exit_code = None
-
-            counts[classify(output, exit_code, timed_out)] += 1
-
-        finally:
-            temp_path.unlink(missing_ok=True)
-
-    return counts
+def classify_result(result: subprocess.CompletedProcess[str]) -> str:
+    if result.returncode == DATA_EXIT_CODE:
+        return "data corruption detected"
+    if result.returncode == SIG_EXIT_CODE:
+        return "signature mismatch detected"
+    if "stop reason = signal" in result.stdout:
+        return "crash"
+    if "exited with status = " in result.stdout:
+        return "not detected"
+    return "unknown"
 
 
-def print_summary(counts, num_attempts):
-    print()
-    for outcome in ["data_corruption", "sig_mismatch", "crashed", "undetected"]:
-        n = counts[outcome]
-        print(f"{outcome:<16}: {n:4d} ({100 * n / num_attempts:5.1f}%)")
-
-
-def main():
+def main() -> int:
     parser = argparse.ArgumentParser(
         prog="fault_injection",
         description="Runs a fault injection campaign against a given executable file",
@@ -128,22 +53,6 @@ def main():
         type=Path,
         required=True,
         help="the executable file to inject faults into",
-    )
-    parser.add_argument(
-        "--sections",
-        nargs="+",
-        default=[".data", ".rodata"],
-        help="names of sections to modify",
-    )
-    parser.add_argument(
-        "-s", "--seed", type=int, default=42, help="the seed for random fault injection"
-    )
-    parser.add_argument(
-        "-n",
-        "--num-attempts",
-        type=int,
-        default=100,
-        help="number of random faults to inject",
     )
     parser.add_argument(
         "-t",
@@ -166,32 +75,86 @@ def main():
     if not os.access(args.file, os.X_OK):
         parser.error(f"{args.file} is not executable")
 
-    with args.file.open("rb") as f:
-        elf = ELFFile(f)
+    lldb_bin = shutil.which("lldb")
+    if lldb_bin is None:
+        parser.error("No lldb found.")
 
-        file_sections = {sec.name: sec for sec in elf.iter_sections()}
+    nm_bin = shutil.which("nm")
+    if nm_bin is None:
+        parser.error("No nm found.")
 
-        for section in args.sections:
-            if section not in file_sections:
-                parser.error(
-                    f"Executable {args.file} does not contain a section named {section}"
-                )
-            # NOBITS sections (e.g. .bss) occupy no bytes in the file.
-            if file_sections[section]["sh_type"] == "SHT_NOBITS":
-                parser.error(f"Section {section} has no bytes in the file")
+    file = os.path.abspath(args.file)
 
-    if args.num_attempts <= 0:
-        parser.error("Number of attempts must be >0.")
+    mangled_symbols = {}
+    output = run_command([nm_bin, "--defined-only", file], check=True).stdout
+    for line in output.split("\n"):
+        line = line.strip()
+        if len(line) == 0:
+            continue
+        parts = line.split(" ")
+        address = parts[0]
+        mangled_name = " ".join(parts[2:])
+        mangled_symbols[address] = mangled_name
 
-    counts = run_fault_injection_campaign(
-        args.file, args.sections, args.seed, args.num_attempts, args.timeout
-    )
-    print_summary(counts, args.num_attempts)
+    demangled_symbols = {}
+    output = run_command([nm_bin, "-C", "--defined-only", file], check=True).stdout
+    for line in output.split("\n"):
+        line = line.strip()
+        if len(line) == 0:
+            continue
+        parts = line.split(" ")
+        address = parts[0]
+        demangled_name = " ".join(parts[2:])
+        demangled_symbols[address] = demangled_name
 
-    if args.check_detection and not (
-        counts["data_corruption"] or counts["sig_mismatch"]
-    ):
-        print("No fault was detected", file=sys.stderr)
+    demangled_to_mangled_symbols = {}
+    for address, demangled_name in demangled_symbols.items():
+        if address not in mangled_symbols:
+            continue
+        demangled_to_mangled_symbols[demangled_name] = mangled_symbols[address]
+
+    mangled_main = demangled_to_mangled_symbols["add::main"]
+    mangled_A = demangled_to_mangled_symbols["add::A"]
+
+    command = [
+        lldb_bin,
+        "--batch",
+        "--no-lldbinit",
+        "-o",
+        "settings set target.disable-aslr false",
+        "-o",
+        "breakpoint set -n DataCorruption_Handler",
+        "-o",
+        f"breakpoint command add -o 'quit {DATA_EXIT_CODE}' 1",
+        "-o",
+        "breakpoint set -n SigMismatch_Handler",
+        "-o",
+        f"breakpoint command add -o 'quit {SIG_EXIT_CODE}' 2",
+        "-o",
+        f"breakpoint set -n {mangled_main}",
+        "-o",
+        "run",
+        "-o",
+        f"expression -l c -- *(int*)&{mangled_A} = 99",
+        "-o",
+        "continue",
+        "-k",
+        "quit",
+        "--",
+        file,
+    ]
+
+    try:
+        result = run_command(command, timeout=args.timeout)
+        outcome = classify_result(result)
+        print(result.stdout)
+    except subprocess.TimeoutExpired:
+        outcome = "hang"
+
+    print(f"outcome : {outcome}")
+
+    detected = ("data corruption detected", "signature mismatch detected")
+    if args.check_detection and outcome not in detected:
         return 1
     return 0
 
