@@ -1627,15 +1627,11 @@ int EDDI::duplicateInstruction(Instruction &I, BasicBlock &ErrBB) {
 
 /**
  * @returns True if the value V is present in the DuplicatedInstructionMap
- * either as a key or as value
+ * either as a key or as value.
  */
 bool EDDI::isValueDuplicated(Instruction &V) {
-  for (auto Elem : DuplicatedInstructionMap) {
-    if (Elem.first == &V || Elem.second == &V) {
-      return true;
-    }
-  }
-  return false;
+  // Each instruction is inserted both as a key and as a value, so we can look it up with .contains()
+  return DuplicatedInstructionMap.contains(&V);
 }
 
 Function *
