@@ -573,6 +573,16 @@ int EDDI::isUsedByStore(Instruction &I, Instruction &Use) {
   return 0;
 }
 
+// Removes the pairs <V, Copy> and <Copy, V> from DuplicatedInstructionMap, leaving the other duplicates of V
+static void forgetDuplicate(std::unordered_multimap<Value *, Value *> &Map, Value *V, Value *Copy) {
+  for (auto [It, End] = Map.equal_range(V); It != End;) {
+    It = It->second == Copy ? Map.erase(It) : std::next(It);
+  }
+  for (auto [It, End] = Map.equal_range(Copy); It != End;) {
+    It = It->second == V ? Map.erase(It) : std::next(It);
+  }
+}
+
 /**
  * Clones instruction `I` and adds the pair <I, IClone> to
  * DuplicatedInstructionMap, inserting the clone right after the original.
@@ -2051,6 +2061,8 @@ PreservedAnalyses EDDI::run(Module &Md, ModuleAnalysisManager &AM) {
     IRBuilder<> B(CInstr);
     B.SetInsertPoint(CInstr);
 
+    // Arguments duplicated with a temporary copy made right before this call, with their copies
+    std::vector<std::pair<Value *, Value *>> TemporaryCopies;
     for (unsigned i = 0; i < CInstr->arg_size(); i++) {
       // Populate args and ParamTypes from the original instruction
       Value *Arg = CInstr->getArgOperand(i);
@@ -2065,7 +2077,9 @@ PreservedAnalyses EDDI::run(Module &Md, ModuleAnalysisManager &AM) {
       if(Arg->getType()->isPointerTy() && !CInstr->isByValArgument(i) && isa<Instruction>(Arg) && !isa<CallInst>(Arg))
       {
         // If cannot perform TDA, do not duplicate Arg
-        temporaryArgumentDuplication(Md, Arg, B);
+        if (Value *Copy = temporaryArgumentDuplication(Md, Arg, B)) {
+          TemporaryCopies.push_back({Arg, Copy});
+        }
       } else {
         // Otherwise pass two times the same arg
         DuplicatedInstructionMap.insert(std::pair<Value *, Value *>(Arg, Arg)); // TODO: Check if needed
@@ -2077,6 +2091,12 @@ PreservedAnalyses EDDI::run(Module &Md, ModuleAnalysisManager &AM) {
       if(InstructionsToRemove.find(CInstr) == InstructionsToRemove.end()) {
         InstructionsToRemove.insert(CInstr);
       }
+    }
+
+    // The temporary copies are valid only for this call: forget them, or another call with the same argument would
+    // use a copy that may not dominate it (e.g. if the two calls are in different branches)
+    for (auto [Arg, Copy] : TemporaryCopies) {
+      forgetDuplicate(DuplicatedInstructionMap, Arg, Copy);
     }
 
     // insert the code for calling the error basic block in case of a mismatch
@@ -2138,13 +2158,13 @@ PreservedAnalyses EDDI::run(Module &Md, ModuleAnalysisManager &AM) {
   return PreservedAnalyses::none();
 }
 
-bool EDDI::temporaryArgumentDuplication(Module &Md, llvm::Value *value, IRBuilder<> &B) {
+Value *EDDI::temporaryArgumentDuplication(Module &Md, llvm::Value *value, IRBuilder<> &B) {
   const llvm::DataLayout &DL = Md.getDataLayout();
 
   auto TTIter = deducedTypes.transparentTypes.find(value);
   if (TTIter == deducedTypes.transparentTypes.end()) {
     errs() << "Warning: Cannot TDA value " << *value << "\n";
-    return false;
+    return nullptr;
   }
 
   // Prints the pointed type (the one being duplicated) and its size
@@ -2178,7 +2198,7 @@ bool EDDI::temporaryArgumentDuplication(Module &Md, llvm::Value *value, IRBuilde
 
   if (Candidates.empty()) {
     errs() << "Warning! TDA value contains opaque pointer " << *value << "\n";
-    return false;
+    return nullptr;
   }
 
   // TDA produces an unordered_set of types, whose iteration order is not deterministic, so we choose
@@ -2214,7 +2234,7 @@ bool EDDI::temporaryArgumentDuplication(Module &Md, llvm::Value *value, IRBuilde
     VTy = VTy->getPointedType();
     if (!VTy) {
       errs() << "Error! Can't find final value for pointer " << *currentPtr << "\n";
-      return false;
+      return nullptr;
     }
 
     if (VTy->isPointerTT()) {
@@ -2263,7 +2283,7 @@ bool EDDI::temporaryArgumentDuplication(Module &Md, llvm::Value *value, IRBuilde
   DuplicatedInstructionMap.emplace(value, allocaPrev);
   DuplicatedInstructionMap.insert(std::pair<Value *, Value *>(memcpy_call, memcpy_call));
 
-  return true;
+  return allocaPrev;
 }
 
 Instruction *getSingleReturnInst(Function &F) {
