@@ -56,6 +56,10 @@ test_name = "c_call_branches"
 source_file = "c/data_duplication_integrity/call_branches.c"
 
 [[tests]]
+test_name = "c_const_global_branches"
+source_file = "c/data_duplication_integrity/const_global_branches.c"
+
+[[tests]]
 test_name = "c_arit_pipeline"
 source_file = "c/misc_math/arit_pipeline.c"
 
@@ -292,6 +296,10 @@ source_file = "rust/data_duplication_integrity/vector_store.rs"
 [[tests]]
 test_name = "rust_call_branches"
 source_file = "rust/data_duplication_integrity/call_branches.rs"
+
+[[tests]]
+test_name = "rust_const_global_branches"
+source_file = "rust/data_duplication_integrity/const_global_branches.rs"
 
 [[tests]]
 test_name = "rust_complex"

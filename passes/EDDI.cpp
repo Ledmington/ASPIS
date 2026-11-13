@@ -667,6 +667,7 @@ void EDDI::duplicateOperands(
   // iterate over the operands and switch them with their duplicates in the
   // duplicated instructions
   for (Value *V : I.operand_values()) {
+    Value *TemporaryCopy = nullptr;
     // if the operand has not been duplicated we need to duplicate it
     if (isa<Instruction>(V)) {
       Instruction *Operand = cast<Instruction>(V);
@@ -715,7 +716,7 @@ void EDDI::duplicateOperands(
       }
     } else if (isa<StoreInst>(I) && isa<GlobalVariable>(V) && cast<GlobalVariable>(V)->isConstant()) {
       IRBuilder<> B(&I);
-      temporaryArgumentDuplication(*I.getModule(), V, B);
+      TemporaryCopy = temporaryArgumentDuplication(*I.getModule(), V, B);
     }
 
     if (IClone != nullptr) {
@@ -724,6 +725,12 @@ void EDDI::duplicateOperands(
       if (CloneOperand != nullptr) {
         IClone->setOperand(J, CloneOperand); // set the J-th operand with the duplicate value
       }
+    }
+
+    // The temporary copy is valid only for this store: forget it, or another use of the same global in the function
+    // would use a copy that may not dominate it
+    if (TemporaryCopy != nullptr) {
+      forgetDuplicate(DuplicatedInstructionMap, V, TemporaryCopy);
     }
     J++;
   }
