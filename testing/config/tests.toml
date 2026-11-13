@@ -48,6 +48,10 @@ test_name = "c_volatile_io"
 source_file = "c/data_duplication_integrity/volatile_io.c"
 
 [[tests]]
+test_name = "c_vector_store"
+source_file = "c/data_duplication_integrity/vector_store.c"
+
+[[tests]]
 test_name = "c_arit_pipeline"
 source_file = "c/misc_math/arit_pipeline.c"
 
@@ -276,6 +280,10 @@ source_file = "rust/simple/template.rs"
 [[tests]]
 test_name = "rust_volatile_memory_order"
 source_file = "rust/simple/volatile_memory_order.rs"
+
+[[tests]]
+test_name = "rust_vector_store"
+source_file = "rust/data_duplication_integrity/vector_store.rs"
 
 [[tests]]
 test_name = "rust_complex"

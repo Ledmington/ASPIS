@@ -357,9 +357,10 @@ void EDDI::preprocess(Module &Md) {
       }
     }
     
-    // All the Global Variables are to be hardened except the ones explicitly marked as `exclude` or `to_duplicate`
+    // All the Global Variables are to be hardened except the ones explicitly marked as `exclude` or `to_duplicate`,
+    // and the constants
     for(auto &GV : Md.globals()) {
-      if(GV.hasName() && !isToDuplicateName(GV.getName())) {
+      if(GV.hasName() && !GV.isConstant() && !isToDuplicateName(GV.getName())) {
         if(FuncAnnotations.find(&GV) == FuncAnnotations.end() || 
           (!FuncAnnotations.find(&GV)->second.starts_with("exclude") && !FuncAnnotations.find(&GV)->second.starts_with("to_duplicate"))) {
           toHardenVariables.insert(&GV);
@@ -388,14 +389,14 @@ void EDDI::preprocess(Module &Md) {
       for(auto &I : BB) {
         for(auto &V : I.operands()) {
 
-          if(isa<GlobalVariable>(V) && cast<GlobalVariable>(V)->hasInitializer() && toHardenVariables.find(V) == toHardenVariables.end()) {
+          if(isa<GlobalVariable>(V) && cast<GlobalVariable>(V)->hasInitializer() && !cast<GlobalVariable>(V)->isConstant() && toHardenVariables.find(V) == toHardenVariables.end()) {
             toHardenVariables.insert(V);
             LLVM_DEBUG(dbgs() << "Inserting GV from explicit toHarden: " << *V << "\n");
           } 
           else if(isa<GEPOperator>(V)) {
             for(auto &U : cast<GEPOperator>(V)->operands()) {
               // if(isa<GlobalVariable>(U) && U->hasName() && !isToDuplicateName(U->getName())) {
-              if(isa<GlobalVariable>(U) && cast<GlobalVariable>(U)->hasInitializer() && toHardenVariables.find(U) == toHardenVariables.end()) {
+              if(isa<GlobalVariable>(U) && cast<GlobalVariable>(U)->hasInitializer() && !cast<GlobalVariable>(U)->isConstant() && toHardenVariables.find(U) == toHardenVariables.end()) {
                 toHardenVariables.insert(U);
                 LLVM_DEBUG(dbgs() << "Inserting GV from explicit toHarden from GEPOp: " << *U << "\n");
               }
@@ -1033,6 +1034,19 @@ void EDDI::compareValues(std::vector<Value *> *CmpInstructions, Value &V1, Value
 
   TransparentType *V1Ty = deducedTypes.transparentTypes.find(&V1)->second.begin()->get();
   TransparentType *V2Ty = deducedTypes.transparentTypes.find(&V2)->second.begin()->get();
+
+  // TDA sees values of vector types as arrays, but their elements cannot be read
+  // with `extractvalue`: compare all the elements at once and do a reduction
+  if(V1.getType()->isVectorTy()) {
+    Value *ElemsCmp = V1.getType()->isFPOrFPVectorTy() ? B.CreateFCmp(CmpInst::FCMP_UEQ, &V1, &V2)
+                                                       : B.CreateICmp(CmpInst::ICMP_EQ, &V1, &V2);
+    Value *Cmp = B.CreateAndReduce(ElemsCmp);
+    CmpInstructions->push_back(Cmp);
+    DuplicatedInstructionMap.insert(std::pair<Value *, Value *>(ElemsCmp, ElemsCmp));
+    DuplicatedInstructionMap.insert(std::pair<Value *, Value *>(Cmp, Cmp));
+    comparisonCounter++;
+    return;
+  }
 
   if(V1Ty->isPointerTT() || V2Ty->isPointerTT()) {
     comparePtrs(CmpInstructions, V1, V2, B);
