@@ -16,6 +16,7 @@ DOCKER_SHARED_VOLUME = "/workspace/ASPIS/tmp"
 LOCAL_SHARED_VOLUME = "./tests/"
 DOCKER_COMPOSE_FILE = "../docker/docker-compose.yml"
 COMPARISON_COUNTER_PATH = "./build/comparison_counter.csv"
+RUST_ANNOTATIONS_LIB = "../rust-annotations/target/release/libaspis_rust_annotations.so"
 
 data_techniques = ["--no-dup", "--eddi", "--eddi --multiple-errbb", "--eddi --coarse-grained", "--eddi --multiple-errbb --coarse-grained",  "--reddi", "--reddi --multiple-errbb", "--reddi --coarse-grained", "--reddi --multiple-errbb --coarse-grained", "--seddi", "--fdsc"]
 cfc_techniques =   ["--no-cfc", "--cfcss", "--rasm", "--racfed", "--inter-rasm"]
@@ -69,7 +70,11 @@ def cleanup_out_ll(build_dir):
 # Compile without ASPIS to get expected output
 def compile_without_aspis(source_file, output_file, llvm_bin, build_dir):
   """Compile a file without ASPIS."""
-  command = f"{llvm_bin}/clang++ {source_file} -o {build_dir}/{output_file}.out --verbose"
+  if source_file.endswith(".rs"):
+    # No `--cfg aspis`: the ASPIS annotations must leave a plain build unchanged.
+    command = f"rustc --edition 2024 --check-cfg 'cfg(aspis)' --extern aspis_rust_annotations={RUST_ANNOTATIONS_LIB} -C panic=abort {source_file} -o {build_dir}/{output_file}.out"
+  else:
+    command = f"{llvm_bin}/clang++ {source_file} -o {build_dir}/{output_file}.out --verbose"
   print(command)
   stdout, stderr, exit_code = run_command(command)
   if exit_code != 0:
