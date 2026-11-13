@@ -105,7 +105,8 @@ parse_commands() {
 
     Usage: aspis.sh [options] file(s)...
 
-    The specified files can be any C, C++, or Rust source code files.
+    The specified files can be any C, C++, or Rust source code files, or LLVM IR
+    files (.ll/.bc) that are linked in as they are, skipping the front-end.
     By default, the compiler performs EDDI+CFCSS hardening.
 
     Options:
@@ -266,6 +267,9 @@ EOF
                         input_files="$input_files $opt";
                         rust_input=true;
                         ;;
+                    *.ll | *.bc)
+                        input_files="$input_files $opt";
+                        ;;
                     *)
                         clang_options="$clang_options $opt";
                         ;;
@@ -351,6 +355,8 @@ run_aspis() {
     ## Intermediate .ll files emitted by the frontend, linked into out.ll
     ll_files=()
     excluded_ll_files=()
+    ## IR files given as input, linked as they are (and never removed by the cleanup)
+    ir_input_files=()
 
     title_msg "Front-end and pre-processing"
 
@@ -363,6 +369,10 @@ run_aspis() {
 
     ## FRONTEND
     for input_file in $input_files; do
+        if [[ "$input_file" == *.ll || "$input_file" == *.bc ]]; then
+            ir_input_files+=("$input_file")
+            continue
+        fi
         # Extract the filename without extension
         filename=$(basename "$input_file" | sed 's/\.[^.]*$//')
         # Compile the file to LLVM IR (.ll) and save it in the build directory
@@ -393,7 +403,7 @@ run_aspis() {
     fi
 
     ## LINK & PREPROCESS
-    exe $LLVM_LINK "${ll_files[@]}" -o $build_dir/out.ll
+    exe $LLVM_LINK "${ll_files[@]}" "${ir_input_files[@]}" -o $build_dir/out.ll
 
     success_msg "Emitted and linked IR."
 
